@@ -16,7 +16,6 @@ from cdp_interface import CDPInterface
 REPOSITORY  = "/sites/RetailPricing/Shared%20Documents/General/Competitive%20Intel/Competitor%20PDF%20new%20format%20(horizontal%20file)/"
 LOCAL_REPOSITORY = "sharepoint_interface/local_repository/"
 
-
 def correct_file_name(val: str) -> str:
     """
     Reemplaza espacios/puntos/caracteres raros y 
@@ -24,13 +23,13 @@ def correct_file_name(val: str) -> str:
     """
     val = str(val).lower()
     # elimina ceros adelante
-    val = re.sub('^(0){2,}', "", val)
+    val = re.sub(r'^(0){2,}', "", val)
     # elimina espacios al inicio
-    val = re.sub('^[" "-]+', "", val)
+    val = re.sub(r'^[" "-]+', "", val)
     # elimina caracteres \r \n \t \u00a0
-    val = re.sub('[\r\n\r\t\u00a0]+', ' ', val)
+    val = re.sub(r'[\r\n\r\t\u00a0]+', ' ', val)
     # colapsa espacios múltiples
-    val = re.sub('( ){2,}', ' ', val)
+    val = re.sub(r'( ){2,}', ' ', val)
     # quita espacios finales
     val = val.strip()
     # reemplaza espacios, puntos y guiones por underscore
@@ -38,7 +37,6 @@ def correct_file_name(val: str) -> str:
     val = val.replace(".", "_")
     val = val.replace("-", "_")
     return val
-
 
 def set_column_types(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -81,7 +79,6 @@ def set_column_types(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-
 def excecute_process():
     sp = get_sharepoint_interface("retailpricing")
     if not sp:
@@ -99,7 +96,7 @@ def excecute_process():
         print(f"[INFO] No se encontraron PDFs en {REPOSITORY}")
         return
 
-    # Conexión a CDP
+    # Conexión a CDP (ambiente de producción en este ejemplo)
     cdp = CDPInterface(env.production, crd.process_account)
 
     total = len(pdf_files)
@@ -111,19 +108,21 @@ def excecute_process():
         if not os.path.exists(LOCAL_REPOSITORY):
             os.makedirs(LOCAL_REPOSITORY, exist_ok=True)
 
-        # Descargar
+        # Descargar PDF
         local_pdf_path = sp.download_file(pdf_sharepoint_path, LOCAL_REPOSITORY)
         if not local_pdf_path:
             print("[ERROR] No se pudo descargar el PDF.")
             continue
 
-        # Parsear horizontal
+        # Parsear (horizontal)
         df = pfh.read_file(str(local_pdf_path))
 
         # Observa columnas
         print("[DEBUG] Columnas del DF tras parsear:\n", df.columns.tolist())
         if "ref_col" in df.columns:
             print("[WARN] Se detectó ref_col en el DF... se eliminará.")
+            df = df.drop(columns=["ref_col"], errors="ignore")
+
         print(df.head(5))
 
         # Forzar tipos
@@ -135,9 +134,9 @@ def excecute_process():
         print(df.head(10))
 
         if df.shape[0] > 0:
-            # Nombre base sin extension
+            # Nombre base sin extensión
             raw_name = pathlib.Path(pdf_filename).stem
-            # Aplica la logica "original" de correct_file_name
+            # Aplica la lógica de limpieza
             base_name = correct_file_name(raw_name)
             print("[DEBUG] Nombre base para la tabla temporal:", base_name)
 
@@ -149,7 +148,7 @@ def excecute_process():
         else:
             print("[INFO] DF vacío, no se suben datos.")
 
-        # Eliminar de SharePoint
+        # Eliminar de SharePoint (descomentar si ya confirmaste la subida):
         """
         try:
             if sp.delete_file(pdf_sharepoint_path):
@@ -161,8 +160,6 @@ def excecute_process():
         """
 
     print("\n[INFO] Proceso completado para todos los PDFs.")
-    
-
 
 if __name__ == "__main__":
-  excecute_process()
+    excecute_process()
