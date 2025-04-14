@@ -1,0 +1,8 @@
+{
+    "host": "peanut-hue.cargill.com",
+    "impala_host": "peanut-impala.cargill.com",
+    "hdfs_root_folder": "/prd/internal/anh_customer_profitability_staging",
+    "webhdfs": "https://peanut-haproxy.cargill.com:8443/gateway/peanut",
+    "port": "21050",
+    "schema": "prd_internal_anh_customer_profitability_staging"
+}
