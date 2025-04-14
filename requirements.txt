@@ -1,0 +1,9 @@
+tabula-py
+pandas
+impyla
+thrift
+thrift_sasl
+hdfs
+openpyxl
+pyarrow
+Office365-REST-Python-Client
