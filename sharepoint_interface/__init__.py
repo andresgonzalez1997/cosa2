@@ -1,0 +1,1 @@
+from sharepoint_interface.sharepoint_interface import get_sharepoint_interface
