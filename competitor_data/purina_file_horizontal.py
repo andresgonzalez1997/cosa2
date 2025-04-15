@@ -4,36 +4,31 @@ import tabula
 import re
 
 # ----------------------------------------------------------------------
-# 1) Funciones para fecha y ubicación (parte superior)
+# 1) Funciones para fecha y ubicación (parte superior de la pág. 1)
 # ----------------------------------------------------------------------
 
 def effective_date(file_path):
     """
-    Extrae la fecha (ej. 10/07/2024) desde un área pequeña en la página 1.
-    La retorna en formato YYYY-MM-DD o None.
+    Extrae la fecha (ej. 10/07/2024) de la parte superior de la página 1,
+    devolviéndola en formato YYYY-MM-DD.
     """
     try:
-        # Área pequeña (en puntos) donde suele aparecer "Effective Date ...".
-        # Ajustado para la parte superior de la primera página.
         df_date = tabula.read_pdf(
             file_path,
             pages=1,
             lattice=False,
             stream=True,
             guess=True,
-            area=[50, 0, 130, 600]  # top=50, left=0, bottom=130, right=600
+            area=[50, 0, 130, 600]  # Ajustar si hace falta
         )
         if not df_date:
             return None
-        
         text = str(df_date[0])
-        # Buscar algo como mm/dd/yyyy o mm/dd/yy
         date_pat = re.compile(r"\d{1,2}/\d{1,2}/(\d{4}|\d{2})")
         match = date_pat.search(text)
         if not match:
             return None
         date_str = match.group(0)
-        # Intentar parsear con 2 formatos
         for fmt in ("%m/%d/%Y", "%m/%d/%y"):
             try:
                 dt = datetime.datetime.strptime(date_str, fmt).date()
@@ -46,7 +41,7 @@ def effective_date(file_path):
 
 def plant_location(file_path):
     """
-    Extrae la ubicación (por ejemplo, "HUDSON'S") desde un área pequeña (top) en la página 1.
+    Extrae la ubicación (por ejemplo, "HUDSON'S") de la parte superior de la página 1.
     """
     try:
         df_loc = tabula.read_pdf(
@@ -55,11 +50,10 @@ def plant_location(file_path):
             lattice=False,
             stream=True,
             guess=True,
-            area=[0, 0, 50, 600]  # top=0, left=0, bottom=50, right=600
+            area=[0, 0, 50, 600]  # Ajustar si hace falta
         )
         if not df_loc:
             return None
-        
         text = str(df_loc[0]).upper()
         if "HUDSON'S" in text:
             return "HUDSON'S"
@@ -69,29 +63,49 @@ def plant_location(file_path):
         return None
 
 # ----------------------------------------------------------------------
-# 2) Función para extraer la tabla principal
+# 2) Dos funciones para extraer la tabla principal:
+#    a) Para la página 1 (donde la tabla empieza más abajo)
+#    b) Para las páginas 2 a 13 (tabla puede empezar un poco más arriba)
 # ----------------------------------------------------------------------
 
-def extract_main_table(file_path):
+def extract_table_page1(file_path):
     """
-    Extrae la tabla principal de TODAS las páginas (1-13),
-    usando lattice=True y un área que omite el texto superior (hasta ~140 pt).
+    Extrae SOLO la tabla de la página 1, usando lattice=True y un area
+    que empiece ~240 pt (bastante abajo para saltar el texto 'AQUACULTURE').
+    
+    Ajusta '240' si aún se cuela la cabecera, o si recorta la tabla.
     """
     try:
-        # Para un PDF de tamaño carta (~612 x 792 pt),
-        # definimos un area que empieza en y=140 y termina en y=792.
-        # left=0 y right=612 para tomar todo el ancho.
         tables = tabula.read_pdf(
             file_path,
-            pages="all",        # Todo el PDF
-            lattice=True,       # Usa las líneas de la tabla
-            guess=False,        # No adivines las separaciones
+            pages=1,
+            lattice=True,
+            guess=False,
             multiple_tables=True,
-            area=[140, 0, 792, 612]  # [top, left, bottom, right]
+            area=[240, 0, 792, 612]  # top=240, left=0, bottom=792, right=612
         )
         return tables
     except Exception as e:
-        print(f"[ERROR extract_main_table]: {e}")
+        print(f"[ERROR extract_table_page1]: {e}")
+        return []
+
+def extract_table_pages2plus(file_path):
+    """
+    Extrae la tabla de las páginas 2 a 13 (o 'all' si crees que va a 13+).
+    La parte superior suele ser menor, así que top=100 podría servir.
+    """
+    try:
+        tables = tabula.read_pdf(
+            file_path,
+            pages="2-13",         # Ajustar si son 13 páginas exactas o "2-all"
+            lattice=True,
+            guess=False,
+            multiple_tables=True,
+            area=[100, 0, 792, 612]
+        )
+        return tables
+    except Exception as e:
+        print(f"[ERROR extract_table_pages2plus]: {e}")
         return []
 
 # ----------------------------------------------------------------------
@@ -100,7 +114,7 @@ def extract_main_table(file_path):
 
 def correct_negative_value(value):
     """
-    Convierte "100-" en -100 (float). Si no se puede convertir, retorna el valor original.
+    Convierte "100-" en -100 (float). Si no se puede convertir, deja el valor.
     """
     text = str(value).strip()
     if text.endswith("-"):
@@ -116,18 +130,11 @@ def correct_negative_value(value):
             return value
 
 # ----------------------------------------------------------------------
-# 4) Función principal: unifica todo, forza tipos, etc.
+# 4) read_file: unifica todo y fuerza tipos
 # ----------------------------------------------------------------------
 
 def read_file(file_path):
-    """
-    1) Extrae la tabla principal usando extract_main_table (omitiendo cabecera).
-    2) Extrae la fecha y la ubicación por separado.
-    3) Unifica todo en un DataFrame con el esquema de Hive/CDP.
-    4) Retorna el DataFrame final.
-    """
-
-    # Esquema EXACTO que quieres en Hive/CDP
+    # Esquema EXACTO de la tabla en Hive/CDP
     schema = {
         "product_number": "string",
         "formula_code": "string",
@@ -150,51 +157,50 @@ def read_file(file_path):
         "source": "string"
     }
 
-    numeric_cols = [c for c, t in schema.items() if t == "double"]
+    numeric_cols = [col for col, ctype in schema.items() if ctype == "double"]
 
-    # (a) Extraer las tablas "grandes" (todas las páginas, omitiendo la parte superior)
-    main_tables = extract_main_table(file_path)
-    if not main_tables:
-        print("[WARN] No se extrajo ninguna tabla principal.")
-        # Retorno un DF vacío con las columnas definidas en el schema
+    # (A) Extraer DF de la página 1 (omitiendo cabecera)
+    tables_p1 = extract_table_page1(file_path)
+
+    # (B) Extraer DF de páginas 2+
+    tables_p2 = extract_table_pages2plus(file_path)
+
+    # Unimos todos en un solo DF
+    all_tables = tables_p1 + tables_p2
+    if not all_tables:
+        # Si no salió nada, devolvemos un DF vacío con el esquema
+        print("[WARN] No se extrajo ninguna tabla.")
         df_empty = pd.DataFrame()
         for col, col_type in schema.items():
-            if col_type == "double":
-                df_empty[col] = pd.Series(dtype="float")
-            else:
-                df_empty[col] = pd.Series(dtype="object")
+            df_empty[col] = pd.Series(dtype="float" if col_type == "double" else "object")
         return df_empty
 
-    # Concatenar
-    df_main = pd.concat(main_tables, ignore_index=True)
+    df_main = pd.concat(all_tables, ignore_index=True)
 
-    # (b) Corregir valores negativos en las columnas numéricas
+    # (C) Corregir valores negativos en columnas numéricas
     for col in numeric_cols:
         if col in df_main.columns:
             df_main[col] = df_main[col].apply(correct_negative_value)
 
-    # (c) Forzar tipos EXACTOS
+    # (D) Forzar tipos EXACTOS
     for col, col_type in schema.items():
         if col not in df_main.columns:
-            # crear la columna vacía si no existe
-            if col_type == "double":
-                df_main[col] = pd.Series(dtype="float")
-            else:
-                df_main[col] = pd.Series(dtype="object")
+            # Creamos la columna si no existe
+            df_main[col] = pd.Series(dtype="float" if col_type == "double" else "object")
         else:
             if col_type == "double":
                 df_main[col] = pd.to_numeric(df_main[col], errors="coerce")
             else:
                 df_main[col] = df_main[col].astype(str)
 
-    # (d) Extraer 'plant_location' y 'date_inserted'
+    # (E) Añadir "plant_location", "date_inserted", "source"
     loc = plant_location(file_path) or ""
     eff_date = effective_date(file_path) or ""
-    df_main["plant_location"] = str(loc)
-    df_main["date_inserted"] = str(eff_date)
+    df_main["plant_location"] = loc
+    df_main["date_inserted"] = eff_date
     df_main["source"] = "pdf"
 
-    # Asegurar que sean string
+    # Forzar a string
     df_main["plant_location"] = df_main["plant_location"].astype(str)
     df_main["date_inserted"] = df_main["date_inserted"].astype(str)
     df_main["source"] = df_main["source"].astype(str)
@@ -205,7 +211,7 @@ def read_file(file_path):
 # 5) Uso (main)
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
-    pdf_path = "2024.10.07 Statesville.pdf"  # Ajusta tu ruta
+    pdf_path = "2024.10.07 Statesville.pdf"  # Ajustar la ruta
     final_df = read_file(pdf_path)
 
     print("\n--- TIPOS DEL DATAFRAME ---")
