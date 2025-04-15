@@ -453,36 +453,26 @@ import re
 
 def correct_negative_value(value):
     """
-    Convierte valores con guión al final en negativos (por ejemplo, "100-" se vuelve -100).
-    Si el valor no es convertible a float, retorna el valor original.
+    Convierte valores con guión al final en negativos (por ejemplo, "100-") a -100.
+    Si no se puede convertir a float, regresa el valor original.
     """
     text = str(value).strip()
     if text.endswith("-"):
-        # valor con guión al final, lo convertimos a negativo
-        text_sin_guion = text[:-1]  # quita el último caracter "-"
+        text_sin_guion = text[:-1]
         try:
             return float(text_sin_guion) * -1
         except ValueError:
-            return value  # devolvemos el texto original si falla la conversión
+            return value  # si no se puede convertir, devolvemos el valor original
     else:
-        # si no termina con guión, intentamos convertir a float normal
         try:
             return float(text)
         except ValueError:
             return value
 
-def correct_negative_value_in_price_list(df):
+def correct_negative_value_in_price_list(df, numeric_cols):
     """
-    Aplica correct_negative_value a las columnas numéricas de precios (si existen).
+    Aplica correct_negative_value exclusivamente a las columnas numéricas definidas en numeric_cols.
     """
-    numeric_cols = [
-        "price_change",
-        "list_price",
-        "full_pallet_price",
-        "half_load_full_pallet_price",
-        "full_load_full_pallet_price",
-        "full_load_best_price",
-    ]
     for col in numeric_cols:
         if col in df.columns:
             df[col] = df[col].apply(correct_negative_value)
@@ -490,15 +480,13 @@ def correct_negative_value_in_price_list(df):
 
 def effective_date(file_path):
     """
-    Extrae la fecha (mm/dd/yyyy o mm/dd/yy) de la página 1 y la devuelve en formato YYYY-MM-DD,
-    buscando en un área aproximada del PDF.
+    Extrae la fecha de efectividad (mm/dd/yyyy o mm/dd/yy) de la página 1 y la devuelve en formato YYYY-MM-DD.
     """
     try:
-        # Ajustar 'area' dependiendo de la posición donde aparezca la fecha
         effective_date_table = tabula.read_pdf(
             file_path,
             pages=1,
-            area=[50, 0, 200, 400],  # coordenadas [y1, x1, y2, x2]
+            area=[50, 0, 200, 400],
             guess=True,
             stream=True
         )
@@ -524,13 +512,13 @@ def effective_date(file_path):
 
 def plant_location(file_path):
     """
-    Extrae alguna ubicación (por ejemplo, "HUDSON'S") de la parte superior izquierda de la página 1.
+    Extrae la ubicación (por ejemplo, "HUDSON'S") de la parte superior izquierda de la página 1.
     """
     try:
         loc_table = tabula.read_pdf(
             file_path,
             pages=1,
-            area=[0, 0, 50, 250],  # Ajustar según PDF
+            area=[0, 0, 50, 250],
             guess=True,
             stream=True
         )
@@ -540,67 +528,84 @@ def plant_location(file_path):
         text = str(loc_table[0]).upper()
         if "HUDSON'S" in text:
             return "HUDSON'S"
-        # si no encuentra la palabra clave, retornamos la primera línea detectada
+        # Tomamos la primera línea como fallback
         first_line = text.split("\n")[0].strip()
         return first_line.replace(",", "").strip()
     except:
         return None
 
-def read_file(file_path):
+def find_tables_in_pdf(file_path):
     """
-    1) Lee todas las tablas del PDF (sin forzar 16 columnas).
-    2) Concatena todo en un único DataFrame (sin eliminar filas basadas en 'product_number' o similar).
-    3) Aplica correcciones mínimas (negativos).
-    4) Añade 'plant_location', 'date_inserted' y 'source'.
-    5) Devuelve el DataFrame final sin reordenar ni eliminar columnas.
+    Extrae todas las tablas del PDF usando tabula (múltiples tablas, modo stream).
     """
-    # 1) Extraer todas las tablas detectadas en el PDF
     try:
-        # IMPORTANTE: Prueba con lattice=True si tu PDF tiene líneas que definan cada celda.
-        # De lo contrario, sigue con stream=True.
         table_list = tabula.read_pdf(
             file_path,
             pages="all",
-            multiple_tables=True,
-            stream=True,    # o lattice=True si es un PDF con líneas
-            guess=True
+            stream=True,
+            guess=True,
+            multiple_tables=True
         )
+        return table_list
     except Exception as e:
-        print(f"[ERROR en read_file]: {e}")
-        return pd.DataFrame()
+        print(f"[ERROR in find_tables_in_pdf]: {e}")
+        return []
 
+def read_file(file_path):
+    # Definimos las columnas que deben ser numéricas (por ejemplo, precios)
+    numeric_cols = [
+        "price_change",
+        "list_price",
+        "full_pallet_price",
+        "half_load_full_pallet_price",
+        "full_load_full_pallet_price",
+        "full_load_best_price",
+    ]
+
+    # 1) Extraer tablas crudas del PDF
+    table_list = find_tables_in_pdf(file_path)
     if not table_list:
         print("[WARN] No se encontraron tablas en el PDF.")
         return pd.DataFrame()
 
-    # 2) Unir todos los DataFrames en uno solo, sin imponer número fijo de columnas
-    df_concatenado = pd.concat(table_list, ignore_index=True)
+    # 2) Procesar cada tabla:
+    #    - Forzamos las columnas 'numeric_cols' a la corrección de negativos,
+    #    - El resto de columnas se convierten a string.
+    processed_tables = []
+    for tbl in table_list:
+        # Aplica corrección de negativos en las columnas definidas
+        for col in tbl.columns:
+            if col in numeric_cols:
+                # Corrección de valor negativo
+                tbl[col] = tbl[col].apply(correct_negative_value)
+            else:
+                # Forzamos a texto
+                tbl[col] = tbl[col].astype(str)
+        processed_tables.append(tbl)
 
-    # 3) Aplicar corrección de valores negativos en columnas de precio (si existen)
-    df_concatenado = correct_negative_value_in_price_list(df_concatenado)
+    # 3) Concatenar todas las tablas procesadas
+    df_final = pd.concat(processed_tables, ignore_index=True)
 
-    # 4) Agregar la ubicación y la fecha
-    df_concatenado["plant_location"] = plant_location(file_path)
-    df_concatenado["date_inserted"] = effective_date(file_path)
+    # 4) Agregamos 'plant_location' y 'date_inserted'
+    df_final["plant_location"] = plant_location(file_path)
+    df_final["date_inserted"] = effective_date(file_path)
 
-    # 5) Agregar la columna 'source' por conveniencia
-    df_concatenado["source"] = "pdf"
+    # 5) Agregamos la columna 'source'
+    df_final["source"] = "pdf"
 
-    # Si deseas **no perder nada**, evita dropear filas vacías
-    # df_concatenado.dropna(how="all", inplace=True)  # <- comentar si no quieres borrar nada
+    return df_final
 
-    return df_concatenado
-
-
-# Ejemplo de uso:
+# EJEMPLO DE USO
 if __name__ == "__main__":
-    pdf_path = "2024.10.07 Statesville (1).pdf"  # Ajusta la ruta
+    pdf_path = "2024.10.07 Statesville (1).pdf"  # tu PDF de ejemplo
     final_df = read_file(pdf_path)
 
-    # Observa cuántas filas/columnas se obtienen
+    print("\n--- Info del DataFrame final ---")
     print(final_df.info())
-    print(final_df.head(20))
 
-    # Si quieres exportar a CSV, Parquet, etc.
-    final_df.to_csv("output_statesville.csv", index=False, encoding="utf-8-sig")
-    print("\nArchivo CSV generado: output_statesville.csv")
+    print("\n--- Ejemplo de filas ---")
+    print(final_df.head(10))
+
+    # Puedes exportar a CSV, parquet, etc.
+    final_df.to_csv("output_final.csv", index=False, encoding="utf-8-sig")
+    print("\nSe generó el archivo: output_final.csv")
