@@ -3,194 +3,200 @@ import pandas as pd
 import tabula
 import re
 
-def default_columns(df):
-    return df[[
-        "product_number",
-        "formula_code",
-        "product_name",
-        "ref_col",
-        "unit_weight",
-        "product_form",
-        "fob_or_dlv",
-        "price_change",
-        "single_unit_list_price",
-        "full_pallet_list_price",
-        "pkg_bulk_discount",
-        "best_net_list_price",
-        "species",
-        "plant_location",
-        "date_inserted",
-        "source"
-    ]]
-
-def source_columns(df):
-    df["source"] = "pdf"
-    return df
-
-def find_unit_weight(df):
-    """
-    Si en 'unit_weight' no aparece el texto 'LB',
-    se busca en la 'product_name' y se mueve a 'unit_weight'.
-    """
-    for index, row in df.iterrows():
-        if not re.search("LB", str(row["unit_weight"])):
-            search_result = re.findall(r"\d*\s*LB", str(row["product_name"]))
-            if len(search_result) > 0:
-                df.at[index, "unit_weight"] = search_result[0]
-    return df
-
-def correct_negative_value(value):
-    """
-    Convierte valores con guión final en negativos:
-      Ej: '100-' -> -100
-    """
-    if str(value).endswith("-"):
-        return float(str(value).replace("-","")) * -1
-    else:
-        return float(value)
-
-def correct_negative_value_in_price_list(df):
-    """
-    Aplica correct_negative_value a las columnas de precios,
-    asumiendo que están en las columnas [7..12).
-    """
-    for col in df.columns[7:12]:
-        df[col] = df[col].apply(correct_negative_value)
-    return df
+# ----------------------------------------------------------------------
+# 1) Funciones para fecha y ubicación (parte superior)
+# ----------------------------------------------------------------------
 
 def effective_date(file_path):
     """
-    Lee la fecha del PDF, buscando en el área [54,10,82,254] (pág.1).
-    Devuelve la fecha en formato 'YYYY-MM-DD'.
+    Extrae la fecha (ej. 10/07/2024) desde un área pequeña en la página 1.
+    La retorna en formato YYYY-MM-DD o None.
     """
-    effective_date_value = None
-    effective_date_table = tabula.read_pdf(file_path, pages=1, area=[54,10,82,254])
-    # Buscar con regex: dd/dd/dd
-    results = re.findall(r"[0-9][0-9]/[0-9][0-9]/[0-9][0-9]", str(effective_date_table[0]))
-    if len(results) > 0:
-        effective_date_value = datetime.datetime.strptime(results[0], "%m/%d/%y").date()
-        return effective_date_value.strftime("%Y-%m-%d")
+    try:
+        # Área pequeña (en puntos) donde suele aparecer "Effective Date ...".
+        # Ajustado para la parte superior de la primera página.
+        df_date = tabula.read_pdf(
+            file_path,
+            pages=1,
+            lattice=False,
+            stream=True,
+            guess=True,
+            area=[50, 0, 130, 600]  # top=50, left=0, bottom=130, right=600
+        )
+        if not df_date:
+            return None
+        
+        text = str(df_date[0])
+        # Buscar algo como mm/dd/yyyy o mm/dd/yy
+        date_pat = re.compile(r"\d{1,2}/\d{1,2}/(\d{4}|\d{2})")
+        match = date_pat.search(text)
+        if not match:
+            return None
+        date_str = match.group(0)
+        # Intentar parsear con 2 formatos
+        for fmt in ("%m/%d/%Y", "%m/%d/%y"):
+            try:
+                dt = datetime.datetime.strptime(date_str, fmt).date()
+                return dt.strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+    except:
+        pass
     return None
 
 def plant_location(file_path):
     """
-    Lee la 'plant location' del PDF, buscando en el área [0,500,40,700] (pág.1).
-    """
-    location_table = tabula.read_pdf(file_path, pages=1, area=[0,500,40,700])
-    location = str(location_table[0]).split("\n")[0].strip().replace(",", "").upper()
-    return location
-
-def add_effective_date(df, file_path):
-    df["date_inserted"] = effective_date(file_path)
-    return df
-
-def add_plant_location(df, file_path):
-    df["plant_location"] = plant_location(file_path)
-    return df
-
-def add_species_column(df):
-    """
-    Toma las filas que no inicien con un dígito (regex) como 'species',
-    las elimina de la tabla y las usa como 'species' para las siguientes filas.
-    """
-    species = None
-    df["species"] = None
-    for index, row in df.iterrows():
-        if re.match(r"\d", str(row[0])) is None:
-            species = str(row[0]).replace(",", "").upper()
-            df = df.drop(index, axis=0)
-        else:
-            df.loc[index, "species"] = species
-    df = df.reset_index(drop=True)
-    return df
-
-def set_column_names(df):
-    """
-    Renombra columnas a los nombres deseados.
-    """
-    df.columns = [
-        "product_number",
-        "formula_code",
-        "product_name",
-        "ref_col",
-        "unit_weight",
-        "product_form",
-        "fob_or_dlv",
-        "price_change",
-        "single_unit_list_price",
-        "full_pallet_list_price",
-        "pkg_bulk_discount",
-        "best_net_list_price"
-    ]
-    return df
-
-def valid_table(df):
-    """
-    Chequeo simple: si un DataFrame tiene más de 5 columnas, lo consideramos tabla válida.
-    """
-    if not isinstance(df, pd.DataFrame):
-        return False
-    if not df.shape[1] > 5:
-        return False
-    return True
-
-def raw_price_list(table_list):
-    """
-    Concatena todos los DataFrames válidos (más de 5 columnas).
-    """
-    price_list = pd.DataFrame()
-    for tbl in table_list:
-        if valid_table(tbl):
-            price_list = pd.concat([price_list, tbl], ignore_index=True)
-    return price_list
-
-def find_tables_in_pdf(file_path):
-    """
-    Lee todas las tablas del PDF (todas las páginas) usando:
-    - area=[89,10,800,650],
-    - lattice=True (aprovecha las líneas si el PDF las tiene claras).
+    Extrae la ubicación (por ejemplo, "HUDSON'S") desde un área pequeña (top) en la página 1.
     """
     try:
-        table_list = tabula.read_pdf(file_path, pages="all", area=[89,10,800,650], lattice=True)
-        return table_list
-    except Exception as error:
-        print(f"[ERROR find_tables_in_pdf]: {error}")
+        df_loc = tabula.read_pdf(
+            file_path,
+            pages=1,
+            lattice=False,
+            stream=True,
+            guess=True,
+            area=[0, 0, 50, 600]  # top=0, left=0, bottom=50, right=600
+        )
+        if not df_loc:
+            return None
+        
+        text = str(df_loc[0]).upper()
+        if "HUDSON'S" in text:
+            return "HUDSON'S"
+        first_line = text.split("\n")[0].strip()
+        return first_line.replace(",", "").strip()
+    except:
+        return None
+
+# ----------------------------------------------------------------------
+# 2) Función para extraer la tabla principal
+# ----------------------------------------------------------------------
+
+def extract_main_table(file_path):
+    """
+    Extrae la tabla principal de TODAS las páginas (1-13),
+    usando lattice=True y un área que omite el texto superior (hasta ~140 pt).
+    """
+    try:
+        # Para un PDF de tamaño carta (~612 x 792 pt),
+        # definimos un area que empieza en y=140 y termina en y=792.
+        # left=0 y right=612 para tomar todo el ancho.
+        tables = tabula.read_pdf(
+            file_path,
+            pages="all",        # Todo el PDF
+            lattice=True,       # Usa las líneas de la tabla
+            guess=False,        # No adivines las separaciones
+            multiple_tables=True,
+            area=[140, 0, 792, 612]  # [top, left, bottom, right]
+        )
+        return tables
+    except Exception as e:
+        print(f"[ERROR extract_main_table]: {e}")
         return []
 
+# ----------------------------------------------------------------------
+# 3) Corrección de valores negativos con guion
+# ----------------------------------------------------------------------
+
+def correct_negative_value(value):
+    """
+    Convierte "100-" en -100 (float). Si no se puede convertir, retorna el valor original.
+    """
+    text = str(value).strip()
+    if text.endswith("-"):
+        text_sin_guion = text[:-1]
+        try:
+            return float(text_sin_guion) * -1
+        except ValueError:
+            return value
+    else:
+        try:
+            return float(text)
+        except ValueError:
+            return value
+
+# ----------------------------------------------------------------------
+# 4) Función principal: unifica todo, forza tipos, etc.
+# ----------------------------------------------------------------------
+
 def read_file(file_path):
-    # 1) Extrae listas de tablas
-    table_list = find_tables_in_pdf(file_path)
+    """
+    1) Extrae la tabla principal usando extract_main_table (omitiendo cabecera).
+    2) Extrae la fecha y la ubicación por separado.
+    3) Unifica todo en un DataFrame con el esquema de Hive/CDP.
+    4) Retorna el DataFrame final.
+    """
 
-    # 2) Concatena las tablas válidas
-    price_list = raw_price_list(table_list)
+    # Esquema EXACTO que quieres en Hive/CDP
+    schema = {
+        "product_number": "string",
+        "formula_code": "string",
+        "product_name": "string",
+        "product_form": "string",
+        "unit_weight": "double",
+        "pallet_quantity": "double",
+        "stocking_status": "string",
+        "min_order_quantity": "double",
+        "days_lead_time": "double",
+        "fob_or_dlv": "string",
+        "price_change": "double",
+        "list_price": "double",
+        "full_pallet_price": "double",
+        "half_load_full_pallet_price": "double",
+        "full_load_full_pallet_price": "double",
+        "full_load_best_price": "double",
+        "plant_location": "string",
+        "date_inserted": "string",
+        "source": "string"
+    }
 
-    # 3) Renombra columnas a las definitivas
-    price_list = set_column_names(price_list)
+    numeric_cols = [c for c, t in schema.items() if t == "double"]
 
-    # 4) Ajusta la columna species
-    price_list = add_species_column(price_list)
+    # (a) Extraer las tablas "grandes" (todas las páginas, omitiendo la parte superior)
+    main_tables = extract_main_table(file_path)
+    if not main_tables:
+        print("[WARN] No se extrajo ninguna tabla principal.")
+        # Retorno un DF vacío con las columnas definidas en el schema
+        df_empty = pd.DataFrame()
+        for col, col_type in schema.items():
+            if col_type == "double":
+                df_empty[col] = pd.Series(dtype="float")
+            else:
+                df_empty[col] = pd.Series(dtype="object")
+        return df_empty
 
-    # 5) Agrega ubicación y fecha
-    price_list = add_plant_location(price_list, file_path)
-    price_list = add_effective_date(price_list, file_path)
+    # Concatenar
+    df_main = pd.concat(main_tables, ignore_index=True)
 
-    # 6) Corrige valores negativos en columnas de precios
-    price_list = correct_negative_value_in_price_list(price_list)
+    # (b) Corregir valores negativos en las columnas numéricas
+    for col in numeric_cols:
+        if col in df_main.columns:
+            df_main[col] = df_main[col].apply(correct_negative_value)
 
-    # 7) Ajusta 'unit_weight' si no contiene "LB"
-    price_list = find_unit_weight(price_list)
+    # (c) Forzar tipos EXACTOS
+    for col, col_type in schema.items():
+        if col not in df_main.columns:
+            # crear la columna vacía si no existe
+            if col_type == "double":
+                df_main[col] = pd.Series(dtype="float")
+            else:
+                df_main[col] = pd.Series(dtype="object")
+        else:
+            if col_type == "double":
+                df_main[col] = pd.to_numeric(df_main[col], errors="coerce")
+            else:
+                df_main[col] = df_main[col].astype(str)
 
-    # 8) Indica que la fuente es 'pdf'
-    price_list = source_columns(price_list)
+    # (d) Extraer 'plant_location' y 'date_inserted'
+    loc = plant_location(file_path) or ""
+    eff_date = effective_date(file_path) or ""
+    df_main["plant_location"] = str(loc)
+    df_main["date_inserted"] = str(eff_date)
+    df_main["source"] = "pdf"
 
-    # 9) Finalmente, filtra (y ordena) las columnas definidas en default_columns
-    price_list = default_columns(price_list)
+    # Asegurar que sean string
+    df_main["plant_location"] = df_main["plant_location"].astype(str)
+    df_main["date_inserted"] = df_main["date_inserted"].astype(str)
+    df_main["source"] = df_main["source"].astype(str)
 
-    # Retorna el DataFrame final
-    return price_list
-
-# Si quisieras probar directo:
-if __name__ == "__main__":
-    df_final = read_file("ruta/a/tu_archivo.pdf")
-    print(df_final.head(20))
-    df_final.to_csv("output.csv", index=False, encoding="utf-8-sig")
+    return df_main
