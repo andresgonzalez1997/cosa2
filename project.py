@@ -212,3 +212,61 @@ if __name__ == "__main__":
 
     df_out = read_file(pdf)
     print(df_out.head())
+
+
+------------------------
+
+
+KeyError: 'PRODUCT NUMBER'
+KeyError                                  Traceback (most recent call last)
+~/.local/lib/python3.7/site-packages/pandas/core/indexes/base.py in get_loc(self, key, method, tolerance)
+   3360             try:
+-> 3361                 return self._engine.get_loc(casted_key)
+   3362             except KeyError as err:
+
+~/.local/lib/python3.7/site-packages/pandas/_libs/index.pyx in pandas._libs.index.IndexEngine.get_loc()
+
+~/.local/lib/python3.7/site-packages/pandas/_libs/index.pyx in pandas._libs.index.IndexEngine.get_loc()
+
+pandas/_libs/hashtable_class_helper.pxi in pandas._libs.hashtable.PyObjectHashTable.get_item()
+
+pandas/_libs/hashtable_class_helper.pxi in pandas._libs.hashtable.PyObjectHashTable.get_item()
+
+KeyError: 'PRODUCT NUMBER'
+
+The above exception was the direct cause of the following exception:
+
+KeyError                                  Traceback (most recent call last)
+/tmp/ipykernel_110/1215835711.py in <module>
+      1 if __name__ == "__main__":
+----> 2     excecute_process()
+
+/tmp/ipykernel_110/4117894532.py in excecute_process()
+     35 
+     36         # Parsear (horizontal)
+---> 37         df = pfh.read_file(str(local_pdf_path))
+     38         print("Aqui vienen los types:-----------------")
+     39         print("\n--- TIPOS DEL DATAFRAME ---")
+
+~/competitor_data/purina_file_horizontal.py in read_file(file_path)
+    159 
+    160     # Limpieza básica de headers repetidos / filas vacías
+--> 161     df = df[~df["PRODUCT NUMBER"].str.contains("PRODUCT", na=False)]
+    162     df = df.dropna(how="all")
+    163     print(f"[INFO read_file] filas tras limpiar headers: {df.shape[0]}")
+
+~/.local/lib/python3.7/site-packages/pandas/core/frame.py in __getitem__(self, key)
+   3456             if self.columns.nlevels > 1:
+   3457                 return self._getitem_multilevel(key)
+-> 3458             indexer = self.columns.get_loc(key)
+   3459             if is_integer(indexer):
+   3460                 indexer = [indexer]
+
+~/.local/lib/python3.7/site-packages/pandas/core/indexes/base.py in get_loc(self, key, method, tolerance)
+   3361                 return self._engine.get_loc(casted_key)
+   3362             except KeyError as err:
+-> 3363                 raise KeyError(key) from err
+   3364 
+   3365         if is_scalar(key) and isna(key) and not self.hasnans:
+
+KeyError: 'PRODUCT NUMBER'
