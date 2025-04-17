@@ -1,97 +1,71 @@
-ImportError: cannot import name 'Protocol' from 'typing' (/usr/local/lib/python3.7/typing.py)
-ImportError                               Traceback (most recent call last)
-/tmp/ipykernel_113/4046556454.py in <module>
-----> 1 import competitor_data.purina_file_horizontal as pfh
+ValueError: 1 columns passed, passed data had 2 columns
+AssertionError                            Traceback (most recent call last)
+~/.local/lib/python3.7/site-packages/pandas/core/internals/construction.py in _finalize_columns_and_data(content, columns, dtype)
+    905     try:
+--> 906         columns = _validate_or_indexify_columns(contents, columns)
+    907     except AssertionError as err:
 
-~/competitor_data/__init__.py in <module>
-----> 1 import competitor_data.purina_file_horizontal as purina
-      2 
-      3 def get_purina_price_list(file_path):
-      4     return purina.read_file(file_path)
-      5 
+~/.local/lib/python3.7/site-packages/pandas/core/internals/construction.py in _validate_or_indexify_columns(content, columns)
+    954             raise AssertionError(
+--> 955                 f"{len(columns)} columns passed, passed data had "
+    956                 f"{len(content)} columns"
 
-~/competitor_data/purina_file_horizontal.py in <module>
-      2 import re
-      3 import pandas as pd
-----> 4 import camelot
-      5 
-      6 # --------------------------------------------------------------------------------
+AssertionError: 1 columns passed, passed data had 2 columns
 
-~/.local/lib/python3.7/site-packages/camelot/__init__.py in <module>
-      4 
-      5 from .__version__ import __version__
-----> 6 from .io import read_pdf
-      7 from .plotting import PlotMethods
-      8 
+The above exception was the direct cause of the following exception:
 
-~/.local/lib/python3.7/site-packages/camelot/io.py in <module>
-      3 import warnings
-      4 
-----> 5 from .handlers import PDFHandler
-      6 from .utils import validate_input, remove_extra
-      7 
+ValueError                                Traceback (most recent call last)
+/tmp/ipykernel_113/1215835711.py in <module>
+      1 if __name__ == "__main__":
+----> 2     excecute_process()
 
-~/.local/lib/python3.7/site-packages/camelot/handlers.py in <module>
-      4 import sys
-      5 
-----> 6 from pypdf import PdfReader, PdfWriter
-      7 
-      8 from .core import TableList
-
-~/.local/lib/python3.7/site-packages/pypdf/__init__.py in <module>
-      9 
-     10 from ._crypt_providers import crypt_provider
----> 11 from ._doc_common import DocumentInformation
-     12 from ._encryption import PasswordType
-     13 from ._merger import PdfMerger
-
-~/.local/lib/python3.7/site-packages/pypdf/_doc_common.py in <module>
-     46 )
-     47 
----> 48 from ._encryption import Encryption
-     49 from ._page import PageObject, _VirtualList
-     50 from ._page_labels import index2label as page_index2page_label
-
-~/.local/lib/python3.7/site-packages/pypdf/_encryption.py in <module>
-     44 )
-     45 
----> 46 from ._utils import logger_warning
-     47 from .generic import (
-     48     ArrayObject,
-
-~/.local/lib/python3.7/site-packages/pypdf/_utils.py in <module>
-    521 
-    522 
---> 523 @dataclass
-    524 class File:
-    525     from .generic import IndirectObject
-
-~/.local/lib/python3.7/site-packages/pypdf/_utils.py in File()
-    523 @dataclass
-    524 class File:
---> 525     from .generic import IndirectObject
-    526 
-    527     name: str = ""
-
-~/.local/lib/python3.7/site-packages/pypdf/generic/__init__.py in <module>
-     36 )
-     37 from ..constants import OutlineFontFlag
----> 38 from ._base import (
-     39     BooleanObject,
-     40     ByteStringObject,
-
-~/.local/lib/python3.7/site-packages/pypdf/generic/_base.py in <module>
+/tmp/ipykernel_113/4117894532.py in excecute_process()
      35 
-     36 from .._codecs import _pdfdoc_encoding_rev
----> 37 from .._protocols import PdfObjectProtocol, PdfWriterProtocol
-     38 from .._utils import (
-     39     StreamType,
+     36         # Parsear (horizontal)
+---> 37         df = pfh.read_file(str(local_pdf_path))
+     38         print("Aqui vienen los types:-----------------")
+     39         print("\n--- TIPOS DEL DATAFRAME ---")
 
-~/.local/lib/python3.7/site-packages/pypdf/_protocols.py in <module>
-      3 from abc import abstractmethod
-      4 from pathlib import Path
-----> 5 from typing import IO, Any, Dict, List, Optional, Protocol, Tuple, Union
-      6 
-      7 from ._utils import StrByteType, StreamType
+~/competitor_data/purina_file_horizontal.py in read_file(file_path)
+    150 
+    151     # (a) Extraer tablas
+--> 152     tables = extract_main_table(file_path)
+    153     if not tables:
+    154         print("[WARN] No se extrajo tabla principal, devolviendo vacío")
 
-ImportError: cannot import name 'Protocol' from 'typing' (/usr/local/lib/python3.7/typing.py)
+~/competitor_data/purina_file_horizontal.py in extract_main_table(file_path)
+     88     headers = [h.lower().strip().replace(" ", "_") for h in raw_headers]
+     89     data = rows[1:]
+---> 90     df = pd.DataFrame(data, columns=headers)
+     91     return [df]
+     92 
+
+~/.local/lib/python3.7/site-packages/pandas/core/frame.py in __init__(self, data, index, columns, dtype, copy)
+    698                         columns,
+    699                         index,  # type: ignore[arg-type]
+--> 700                         dtype,
+    701                     )
+    702                     mgr = arrays_to_mgr(
+
+~/.local/lib/python3.7/site-packages/pandas/core/internals/construction.py in nested_data_to_arrays(data, columns, index, dtype)
+    481         columns = ensure_index(data[0]._fields)
+    482 
+--> 483     arrays, columns = to_arrays(data, columns, dtype=dtype)
+    484     columns = ensure_index(columns)
+    485 
+
+~/.local/lib/python3.7/site-packages/pandas/core/internals/construction.py in to_arrays(data, columns, dtype)
+    805         arr = _list_to_arrays(data)
+    806 
+--> 807     content, columns = _finalize_columns_and_data(arr, columns, dtype)
+    808     return content, columns
+    809 
+
+~/.local/lib/python3.7/site-packages/pandas/core/internals/construction.py in _finalize_columns_and_data(content, columns, dtype)
+    907     except AssertionError as err:
+    908         # GH#26429 do not raise user-facing AssertionError
+--> 909         raise ValueError(err) from err
+    910 
+    911     if len(contents) and contents[0].dtype == np.object_:
+
+ValueError: 1 columns passed, passed data had 2 columns
