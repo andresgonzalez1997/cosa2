@@ -222,7 +222,6 @@ def read_file(file_path):
 
 
 
-
 import fitz  # PyMuPDF
 import datetime
 import re
@@ -234,19 +233,17 @@ import pandas as pd
 
 def effective_date(file_path):
     """
-    Extrae la fecha (ej. 10/07/2024) desde un área pequeña en la página 1.
-    La retorna en formato YYYY-MM-DD o None si no se encuentra.
+    Extrae la fecha (p.ej. 10/07/2024) desde una zona definida en la página 1.
+    Devuelve la fecha en formato 'YYYY-MM-DD' o None si no la encuentra.
     """
     try:
         doc = fitz.open(file_path)
-        page = doc.load_page(0)  # página 1
-        # Tabula usaba [top, left, bottom, right] = [50, 0, 130, 600]
-        # En PyMuPDF: Rect(x0, y0, x1, y1) con origen en esquina superior izquierda
-        rect = fitz.Rect(0, 50, 600, 130)
+        page = doc.load_page(0)
+        # Recorta entre y=50 y y=130 pt para aislar la zona de fecha
+        rect = fitz.Rect(0, 50, page.rect.width, 130)
         text = page.get_text("text", clip=rect)
-        # Buscar patrón de fecha
-        date_pat = re.compile(r"\d{1,2}/\d{1,2}/(?:\d{4}|\d{2})")
-        m = date_pat.search(text)
+        # Busca mm/dd/yyyy o mm/dd/yy
+        m = re.search(r"\b\d{1,2}/\d{1,2}/(?:\d{4}|\d{2})\b", text)
         if not m:
             return None
         date_str = m.group(0)
@@ -255,64 +252,75 @@ def effective_date(file_path):
                 dt = datetime.datetime.strptime(date_str, fmt).date()
                 return dt.strftime("%Y-%m-%d")
             except ValueError:
-                pass
+                continue
     except Exception:
         pass
     return None
 
 def plant_location(file_path):
     """
-    Extrae la ubicación (ej. "HUDSON'S") desde un área pequeña en la página 1.
-    Retorna la primera línea, en mayúsculas, o None si falla.
+    Extrae la ubicación (p.ej. "HUDSON'S") desde una zona definida en la página 1.
+    Devuelve la primera línea encontrada (en mayúsculas), o None si falla.
     """
     try:
         doc = fitz.open(file_path)
         page = doc.load_page(0)
-        # Tabula [0, 0, 50, 600] → Rect(0, 0, 600, 50)
-        rect = fitz.Rect(0, 0, 600, 50)
+        # Recorta entre y=0 y y=50 pt para aislar la zona de ubicación
+        rect = fitz.Rect(0, 0, page.rect.width, 50)
         text = page.get_text("text", clip=rect).upper()
         if "HUDSON'S" in text:
             return "HUDSON'S"
-        first = text.split("\n")[0].strip()
-        return first.replace(",", "").strip()
+        primera = text.split("\n")[0].strip()
+        return primera.replace(",", "").strip()
     except Exception:
         return None
 
 # --------------------------------------------------------------------------------
-# 2) Función para extraer la tabla principal de TODAS las páginas
+# 2) Función para extraer la “tabla” de TODAS las páginas
 # --------------------------------------------------------------------------------
 
-def extract_main_table(file_path):
+def extract_main_table(file_path, header_offset=100):
     """
-    Extrae la tabla principal en TODAS las páginas:
-      - Descarta los primeros ~100 pt para omitir cabecera
-      - Extrae texto, línea a línea
-      - Divide en columnas separando por 2+ espacios
-    Retorna lista de DataFrames (uno por cada PDF completo, aquí un solo DF).
+    Lee cada página recortando los primeros header_offset pt para omitir cabeceras,
+    luego divide cada línea por 2+ espacios y normaliza las filas.
+    Devuelve lista con un solo DataFrame resultante.
     """
     rows = []
     doc = fitz.open(file_path)
-    header_offset = 100  # altura en pt a descartar
     for page in doc:
-        rect = fitz.Rect(0, header_offset, page.rect.width, page.rect.height)
-        txt = page.get_text("text", clip=rect)
-        for line in txt.split("\n"):
+        clip = fitz.Rect(0, header_offset, page.rect.width, page.rect.height)
+        text = page.get_text("text", clip=clip)
+        for line in text.split("\n"):
             line = line.strip()
             if not line:
                 continue
-            # Ajusta este split si tu tabla usa otro separador
+            # Divide donde hay 2 o más espacios consecutivos
             cols = re.split(r"\s{2,}", line)
             rows.append(cols)
 
     if not rows:
         return []
 
-    # Primera fila como cabeceras
-    raw_headers = rows[0]
-    # Normalizamos nombres: minuscula, espacios→_
-    headers = [h.lower().strip().replace(" ", "_") for h in raw_headers]
-    data = rows[1:]
-    df = pd.DataFrame(data, columns=headers)
+    # Cabecera en la primera fila
+    header = rows[0]
+    n_cols = len(header)
+    # Diagnóstico de distribuciones de columnas
+    lengths = sorted(set(len(r) for r in rows))
+    print(f"[DEBUG] Longitudes de fila encontradas: {lengths}")
+
+    # Normaliza datos: igual número de columnas por fila
+    data = []
+    for r in rows[1:]:
+        if len(r) < n_cols:
+            r = r + [""] * (n_cols - len(r))
+        elif len(r) > n_cols:
+            # Agrupa el exceso en la última columna
+            r = r[: n_cols - 1] + [" ".join(r[n_cols - 1 :])]
+        data.append(r)
+
+    # Normaliza nombres de columnas
+    cols_norm = [h.lower().strip().replace(" ", "_") for h in header]
+    df = pd.DataFrame(data, columns=cols_norm)
     return [df]
 
 # --------------------------------------------------------------------------------
@@ -321,35 +329,34 @@ def extract_main_table(file_path):
 
 def correct_negative_value(value):
     """
-    Convierte "100-" en -100 (float). 
-    Si falla, retorna el valor original.
+    Convierte "100-" en -100 (float). Si falla, retorna el valor original.
     """
-    text = str(value).strip()
-    if text.endswith("-"):
-        num = text[:-1]
+    txt = str(value).strip()
+    if txt.endswith("-"):
+        num = txt[:-1]
         try:
             return float(num) * -1
         except ValueError:
             return value
     try:
-        return float(text)
+        return float(txt)
     except ValueError:
         return value
 
 # --------------------------------------------------------------------------------
-# 4) Función principal: unifica todo, ajusta schema, extrae datos finales
+# 4) Función principal: unifica todo, ajusta esquema, extrae datos finales
 # --------------------------------------------------------------------------------
 
 def read_file(file_path):
     """
-    - Extrae la tabla principal (todas las páginas).
-    - Concatena en un DataFrame.
-    - Corrige valores negativos.
-    - Aplica schema (tipos, columnas faltantes).
-    - Agrega plant_location, date_inserted y source.
-    - Retorna el DataFrame final.
+    - Extrae la tabla principal con extract_main_table()
+    - Concatena en un DataFrame
+    - Corrige valores negativos
+    - Asegura columnas según schema (tipos y existencia)
+    - Agrega plant_location, date_inserted y source
+    - Reordena columnas al orden del schema
+    - Devuelve el DataFrame final
     """
-
     schema = {
         "product_number": "string",
         "formula_code": "string",
@@ -369,42 +376,64 @@ def read_file(file_path):
         "full_load_best_price": "double",
         "plant_location": "string",
         "date_inserted": "string",
-        "source": "string"
+        "source": "string",
     }
-    numeric_cols = [c for c,t in schema.items() if t=="double"]
+    numeric_cols = [c for c, t in schema.items() if t == "double"]
 
-    # (a) Extraer tablas
+    # a) Extraer tablas
     tables = extract_main_table(file_path)
     if not tables:
-        print("[WARN] No se extrajo tabla principal, devolviendo vacío")
+        print("[WARN] No se extrajo ninguna tabla; devolviendo DataFrame vacío.")
         return pd.DataFrame({
-            col: pd.Series(dtype="float" if t=="double" else "object")
-            for col,t in schema.items()
+            col: pd.Series(dtype="float" if typ=="double" else "object")
+            for col,typ in schema.items()
         })
 
-    # (b) Concatenar
+    # b) Concatenar
     df = pd.concat(tables, ignore_index=True)
 
-    # (c) Limpiar negativos
+    # c) Corregir negativos
     for col in numeric_cols:
         if col in df.columns:
             df[col] = df[col].apply(correct_negative_value)
 
-    # (d) Asegurar todas las columnas y tipos
+    # d) Asegurar todas las columnas y sus tipos
     for col, typ in schema.items():
         if col not in df.columns:
             df[col] = pd.Series(dtype="float" if typ=="double" else "object")
         else:
-            if typ=="double":
+            if typ == "double":
                 df[col] = pd.to_numeric(df[col], errors="coerce")
             else:
                 df[col] = df[col].astype(str)
 
-    # (e) Agregar metadatos
+    # e) Agregar metadatos
     df["plant_location"] = plant_location(file_path) or ""
-    df["date_inserted"] = effective_date(file_path) or ""
-    df["source"]        = "pdf"
+    df["date_inserted"]  = effective_date(file_path) or ""
+    df["source"]         = "pdf"
 
-    # (f) Reordenar columnas según schema
-    final_cols = [c for c in schema.keys() if c in df.columns]
-    return df[final_cols]
+    # f) Reordenar columnas según el schema
+    final_order = [c for c in schema.keys() if c in df.columns]
+    return df[final_order]
+
+
+# --------------------------------------------------------------------------------
+# 5) Bloque principal de ejecución
+# --------------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) != 2:
+        print("Uso: python purina_parser.py <ruta_al_pdf>")
+        sys.exit(1)
+
+    pdf_path = sys.argv[1]
+    df_final = read_file(pdf_path)
+
+    # Salida de diagnóstico
+    print("\n--- TIPOS DEL DATAFRAME ---")
+    print(df_final.dtypes, "\n")
+    print("--- INFO DEL DATAFRAME FINAL ---")
+    print(df_final.info(), "\n")
+    print("--- MUESTRA DE FILAS ---")
+    print(df_final.head())
