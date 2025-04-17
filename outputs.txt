@@ -56,3 +56,21 @@ ValueError                                Traceback (most recent call last)
      60             )
 
 ValueError: Length mismatch: Expected axis has 128 elements, new values have 16 elements
+
+
+-------------------------
+
+
+def set_column_names(df):
+    """
+    Toma solo las primeras 16 columnas (las de H_COLUMNS),
+    ignora el resto, y luego las renombra.
+    """
+    n = len(H_COLUMNS)
+    if df.shape[1] < n:
+        raise ValueError(f"La tabla solo tiene {df.shape[1]} columnas, se esperaban al menos {n}.")
+    # Recorta a las primeras n columnas
+    df_trimmed = df.iloc[:, :n].copy()
+    df_trimmed.columns = H_COLUMNS
+    return df_trimmed
+
