@@ -1,71 +1,89 @@
-ValueError: 1 columns passed, passed data had 2 columns
-AssertionError                            Traceback (most recent call last)
-~/.local/lib/python3.7/site-packages/pandas/core/internals/construction.py in _finalize_columns_and_data(content, columns, dtype)
-    905     try:
---> 906         columns = _validate_or_indexify_columns(contents, columns)
-    907     except AssertionError as err:
+--- INFO DEL DATAFRAME FINAL ---
+<class 'pandas.core.frame.DataFrame'>
+RangeIndex: 4722 entries, 0 to 4721
+Data columns (total 19 columns):
+ #   Column                       Non-Null Count  Dtype  
+---  ------                       --------------  -----  
+ 0   product_number               4722 non-null   object 
+ 1   formula_code                 4722 non-null   object 
+ 2   product_name                 4722 non-null   object 
+ 3   product_form                 4722 non-null   object 
+ 4   unit_weight                  0 non-null      float64
+ 5   pallet_quantity              0 non-null      float64
+ 6   stocking_status              4722 non-null   object 
+ 7   min_order_quantity           0 non-null      float64
+ 8   days_lead_time               0 non-null      float64
+ 9   fob_or_dlv                   4722 non-null   object 
+ 10  price_change                 0 non-null      float64
+ 11  list_price                   0 non-null      float64
+ 12  full_pallet_price            0 non-null      float64
+ 13  half_load_full_pallet_price  0 non-null      float64
+ 14  full_load_full_pallet_price  0 non-null      float64
+ 15  full_load_best_price         0 non-null      float64
+ 16  plant_location               4722 non-null   object 
+ 17  date_inserted                4722 non-null   object 
+ 18  source                       4722 non-null   object 
+dtypes: float64(10), object(9)
+memory usage: 701.0+ KB
+None
 
-~/.local/lib/python3.7/site-packages/pandas/core/internals/construction.py in _validate_or_indexify_columns(content, columns)
-    954             raise AssertionError(
---> 955                 f"{len(columns)} columns passed, passed data had "
-    956                 f"{len(content)} columns"
+--- MUESTRA DE FILAS ---
+        product_number formula_code product_name product_form  unit_weight  \
+0  Price in US Dollars                                                 NaN   
+1              PRODUCT                                                 NaN   
+2               NUMBER                                                 NaN   
+3              FORMULA                                                 NaN   
+4                 CODE                                                 NaN   
+5        PRODUCT DESC.                                                 NaN   
+6              PRODUCT                                                 NaN   
+7                 FORM                                                 NaN   
+8                 UNIT                                                 NaN   
+9               WEIGHT                                                 NaN   
 
-AssertionError: 1 columns passed, passed data had 2 columns
+   pallet_quantity stocking_status  min_order_quantity  days_lead_time  \
+0              NaN                                 NaN             NaN   
+1              NaN                                 NaN             NaN   
+2              NaN                                 NaN             NaN   
+3              NaN                                 NaN             NaN   
+4              NaN                                 NaN             NaN   
+5              NaN                                 NaN             NaN   
+6              NaN                                 NaN             NaN   
+7              NaN                                 NaN             NaN   
+8              NaN                                 NaN             NaN   
+9              NaN                                 NaN             NaN   
 
-The above exception was the direct cause of the following exception:
+  fob_or_dlv  price_change  list_price  full_pallet_price  \
+0                      NaN         NaN                NaN   
+1                      NaN         NaN                NaN   
+2                      NaN         NaN                NaN   
+3                      NaN         NaN                NaN   
+4                      NaN         NaN                NaN   
+5                      NaN         NaN                NaN   
+6                      NaN         NaN                NaN   
+7                      NaN         NaN                NaN   
+8                      NaN         NaN                NaN   
+9                      NaN         NaN                NaN   
 
-ValueError                                Traceback (most recent call last)
-/tmp/ipykernel_113/1215835711.py in <module>
-      1 if __name__ == "__main__":
-----> 2     excecute_process()
+   half_load_full_pallet_price  full_load_full_pallet_price  \
+0                          NaN                          NaN   
+1                          NaN                          NaN   
+2                          NaN                          NaN   
+3                          NaN                          NaN   
+4                          NaN                          NaN   
+5                          NaN                          NaN   
+6                          NaN                          NaN   
+7                          NaN                          NaN   
+8                          NaN                          NaN   
+9                          NaN                          NaN   
 
-/tmp/ipykernel_113/4117894532.py in excecute_process()
-     35 
-     36         # Parsear (horizontal)
----> 37         df = pfh.read_file(str(local_pdf_path))
-     38         print("Aqui vienen los types:-----------------")
-     39         print("\n--- TIPOS DEL DATAFRAME ---")
-
-~/competitor_data/purina_file_horizontal.py in read_file(file_path)
-    150 
-    151     # (a) Extraer tablas
---> 152     tables = extract_main_table(file_path)
-    153     if not tables:
-    154         print("[WARN] No se extrajo tabla principal, devolviendo vacío")
-
-~/competitor_data/purina_file_horizontal.py in extract_main_table(file_path)
-     88     headers = [h.lower().strip().replace(" ", "_") for h in raw_headers]
-     89     data = rows[1:]
----> 90     df = pd.DataFrame(data, columns=headers)
-     91     return [df]
-     92 
-
-~/.local/lib/python3.7/site-packages/pandas/core/frame.py in __init__(self, data, index, columns, dtype, copy)
-    698                         columns,
-    699                         index,  # type: ignore[arg-type]
---> 700                         dtype,
-    701                     )
-    702                     mgr = arrays_to_mgr(
-
-~/.local/lib/python3.7/site-packages/pandas/core/internals/construction.py in nested_data_to_arrays(data, columns, index, dtype)
-    481         columns = ensure_index(data[0]._fields)
-    482 
---> 483     arrays, columns = to_arrays(data, columns, dtype=dtype)
-    484     columns = ensure_index(columns)
-    485 
-
-~/.local/lib/python3.7/site-packages/pandas/core/internals/construction.py in to_arrays(data, columns, dtype)
-    805         arr = _list_to_arrays(data)
-    806 
---> 807     content, columns = _finalize_columns_and_data(arr, columns, dtype)
-    808     return content, columns
-    809 
-
-~/.local/lib/python3.7/site-packages/pandas/core/internals/construction.py in _finalize_columns_and_data(content, columns, dtype)
-    907     except AssertionError as err:
-    908         # GH#26429 do not raise user-facing AssertionError
---> 909         raise ValueError(err) from err
-    910 
-    911     if len(contents) and contents[0].dtype == np.object_:
-
-ValueError: 1 columns passed, passed data had 2 columns
+   full_load_best_price plant_location date_inserted source  
+0                   NaN       HUDSON'S    2024-10-07    pdf  
+1                   NaN       HUDSON'S    2024-10-07    pdf  
+2                   NaN       HUDSON'S    2024-10-07    pdf  
+3                   NaN       HUDSON'S    2024-10-07    pdf  
+4                   NaN       HUDSON'S    2024-10-07    pdf  
+5                   NaN       HUDSON'S    2024-10-07    pdf  
+6                   NaN       HUDSON'S    2024-10-07    pdf  
+7                   NaN       HUDSON'S    2024-10-07    pdf  
+8                   NaN       HUDSON'S    2024-10-07    pdf  
+9                   NaN       HUDSON'S    2024-10-07    pdf  
