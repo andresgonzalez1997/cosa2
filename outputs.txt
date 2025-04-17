@@ -1,76 +1,105 @@
-CSVParseError: Error failed to create DataFrame with different column tables.
-Try to set `multiple_tables=True`or set `names` option for `pandas_options`. 
-, caused by ParserError('Error tokenizing data. C error: Expected 4 fields in line 4, saw 15\n')
-ParserError                               Traceback (most recent call last)
-~/.local/lib/python3.7/site-packages/tabula/io.py in read_pdf(input_path, output_format, encoding, java_options, pandas_options, multiple_tables, user_agent, use_raw_url, pages, guess, area, relative_area, lattice, stream, password, silent, columns, relative_columns, format, batch, output_path, options)
-    449         try:
---> 450             return [pd.read_csv(io.BytesIO(output), **pandas_options)]
-    451         except pd.errors.ParserError as e:
+#!/usr/bin/env python3
+# quick_statesville_multi.py
 
-~/.local/lib/python3.7/site-packages/pandas/util/_decorators.py in wrapper(*args, **kwargs)
-    310                 )
---> 311             return func(*args, **kwargs)
-    312 
+import sys
+import re
+import datetime
+import pandas as pd
+import fitz       # pip install pymupdf
+import tabula     # pip install tabula-py
 
-~/.local/lib/python3.7/site-packages/pandas/io/parsers/readers.py in read_csv(filepath_or_buffer, sep, delimiter, header, names, index_col, usecols, squeeze, prefix, mangle_dupe_cols, dtype, engine, converters, true_values, false_values, skipinitialspace, skiprows, skipfooter, nrows, na_values, keep_default_na, na_filter, verbose, skip_blank_lines, parse_dates, infer_datetime_format, keep_date_col, date_parser, dayfirst, cache_dates, iterator, chunksize, compression, thousands, decimal, lineterminator, quotechar, quoting, doublequote, escapechar, comment, encoding, encoding_errors, dialect, error_bad_lines, warn_bad_lines, on_bad_lines, delim_whitespace, low_memory, memory_map, float_precision, storage_options)
-    585 
---> 586     return _read(filepath_or_buffer, kwds)
-    587 
+def effective_date(path):
+    """Extrae la fecha (mm/dd/yyyy o mm/dd/yy) de y=50..130 pt en la pág.1."""
+    try:
+        doc  = fitz.open(path)
+        page = doc.load_page(0)
+        txt  = page.get_text("text", clip=fitz.Rect(0,50,page.rect.width,130))
+        m    = re.search(r"\b\d{1,2}/\d{1,2}/(?:\d{2}|\d{4})\b", txt)
+        if not m: return ""
+        for fmt in ("%m/%d/%Y","%m/%d/%y"):
+            try:
+                return datetime.datetime.strptime(m.group(0), fmt).date().isoformat()
+            except ValueError:
+                pass
+    except:
+        pass
+    return ""
 
-~/.local/lib/python3.7/site-packages/pandas/io/parsers/readers.py in _read(filepath_or_buffer, kwds)
-    487     with parser:
---> 488         return parser.read(nrows)
-    489 
+def plant_location(path):
+    """Extrae HUDSON'S (o primera línea) de y=0..50 pt en la pág.1."""
+    try:
+        doc  = fitz.open(path)
+        page = doc.load_page(0)
+        txt  = page.get_text("text", clip=fitz.Rect(0,0,page.rect.width,50)).upper()
+        if "HUDSON'S" in txt:
+            return "HUDSON'S"
+        return txt.split("\n",1)[0].strip().replace(",", "")
+    except:
+        return ""
 
-~/.local/lib/python3.7/site-packages/pandas/io/parsers/readers.py in read(self, nrows)
-   1046         nrows = validate_integer("nrows", nrows)
--> 1047         index, columns, col_dict = self._engine.read(nrows)
-   1048 
+def read_file(path):
+    """
+    1) Lee todas las tablas con Tabula en modo multiple_tables=True
+    2) Une en un solo DataFrame
+    3) Limpia headers repetidos y filas vacías
+    4) Normaliza nombres de columna
+    5) Convierte columnas numéricas (incluyendo guion final como negativo)
+    6) Agrega metadatos
+    """
+    # 1) Extrae todas las tablas detectadas
+    dfs = tabula.read_pdf(
+        path,
+        pages="all",
+        guess=True,
+        multiple_tables=True
+    )
+    if not dfs:
+        raise RuntimeError("Tabula no extrajo ninguna tabla.")
 
-~/.local/lib/python3.7/site-packages/pandas/io/parsers/c_parser_wrapper.py in read(self, nrows)
-    223             if self.low_memory:
---> 224                 chunks = self._reader.read_low_memory(nrows)
-    225                 # destructive to chunks
+    # 2) Concatena, ignorando índice y ordenando columnas según aparezcan
+    df = pd.concat(dfs, ignore_index=True, sort=False)
 
-~/.local/lib/python3.7/site-packages/pandas/_libs/parsers.pyx in pandas._libs.parsers.TextReader.read_low_memory()
+    # 3) Elimina filas completamente vacías
+    df.dropna(how="all", inplace=True)
+    # Elimina filas que repiten el header (p.ej. 'PRODUCT NUMBER')
+    if "product_number" in df.columns:
+        df = df[~df["product_number"].astype(str).str.lower().eq("product number")]
 
-~/.local/lib/python3.7/site-packages/pandas/_libs/parsers.pyx in pandas._libs.parsers.TextReader._read_rows()
+    # 4) Normaliza nombres: strip, lowercase, espacios → guiones bajos
+    df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
 
-~/.local/lib/python3.7/site-packages/pandas/_libs/parsers.pyx in pandas._libs.parsers.TextReader._tokenize_rows()
+    # 5) Detecta y convierte dinámicamente columnas numéricas
+    for col in df.columns:
+        s = df[col].astype(str)
+        # patrón: dígitos, opcional decimal, opcional guion final
+        if s.str.match(r"^\s*\d+(?:\.\d+)?-?\s*$").all():
+            neg = s.str.endswith("-")
+            vals = s.str.replace(r"-$","",regex=True).astype(float)
+            df[col] = vals.where(~neg, -vals)
 
-~/.local/lib/python3.7/site-packages/pandas/_libs/parsers.pyx in pandas._libs.parsers.raise_parser_error()
+    # 6) Agrega metadatos fijos al final
+    df["plant_location"] = plant_location(path)
+    df["date_inserted"]  = effective_date(path)
+    df["source"]         = "pdf"
 
-ParserError: Error tokenizing data. C error: Expected 4 fields in line 4, saw 15
+    # Reordena para que los metadatos queden al final
+    cols = [c for c in df.columns if c not in ("plant_location","date_inserted","source")]
+    return df[cols + ["plant_location","date_inserted","source"]]
 
+# Ejecución desde terminal
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Uso: python quick_statesville_multi.py <archivo.pdf>")
+        sys.exit(1)
 
-During handling of the above exception, another exception occurred:
+    pdf_path = sys.argv[1]
+    df = read_file(pdf_path)
 
-CSVParseError                             Traceback (most recent call last)
-/tmp/ipykernel_114/1215835711.py in <module>
-      1 if __name__ == "__main__":
-----> 2     excecute_process()
+    print("\n--- TIPOS DEL DATAFRAME ---")
+    print(df.dtypes, "\n")
 
-/tmp/ipykernel_114/4117894532.py in excecute_process()
-     35 
-     36         # Parsear (horizontal)
----> 37         df = pfh.read_file(str(local_pdf_path))
-     38         print("Aqui vienen los types:-----------------")
-     39         print("\n--- TIPOS DEL DATAFRAME ---")
+    print("--- INFO DEL DATAFRAME FINAL ---")
+    df.info()
 
-~/competitor_data/purina_file_horizontal.py in read_file(path)
-     58     )
-     59     if not dfs:
----> 60         raise RuntimeError("Tabula no extrajo ninguna tabla del PDF.")
-     61 
-     62     df = dfs[0]
-
-~/.local/lib/python3.7/site-packages/tabula/io.py in read_pdf(input_path, output_format, encoding, java_options, pandas_options, multiple_tables, user_agent, use_raw_url, pages, guess, area, relative_area, lattice, stream, password, silent, columns, relative_columns, format, batch, output_path, options)
-    456             )
-    457 
---> 458             raise CSVParseError(message, e)
-    459 
-    460 
-
-CSVParseError: Error failed to create DataFrame with different column tables.
-Try to set `multiple_tables=True`or set `names` option for `pandas_options`. 
-, caused by ParserError('Error tokenizing data. C error: Expected 4 fields in line 4, saw 15\n
+    print("\n--- MUESTRA DE FILAS ---")
+    print(df.head())
