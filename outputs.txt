@@ -1,60 +1,118 @@
---- MUESTRA DE FILAS ---
-           product_number formula_code product_name product_form  unit_weight  \
-0                    5555                                                 NaN   
-1                    5D03                                                 NaN   
-2  AQUAMAX FINGERLING 300                                                 NaN   
-3                EXTRUDED                                                 NaN   
-4                50.00 LB                                                 NaN   
-5                      40                                                 NaN   
-6                      FX                                                 NaN   
-7                       0                                                 NaN   
-8                       5                                                 NaN   
-9                     DLV                                                 NaN   
+#!/usr/bin/env python3
+# purina_parser.py
 
-   pallet_quantity stocking_status  min_order_quantity  days_lead_time  \
-0              NaN                                 NaN             NaN   
-1              NaN                                 NaN             NaN   
-2              NaN                                 NaN             NaN   
-3              NaN                                 NaN             NaN   
-4              NaN                                 NaN             NaN   
-5              NaN                                 NaN             NaN   
-6              NaN                                 NaN             NaN   
-7              NaN                                 NaN             NaN   
-8              NaN                                 NaN             NaN   
-9              NaN                                 NaN             NaN   
+import sys
+import re
+import fitz        # pip install pymupdf
+import pdfplumber # pip install pdfplumber
+import datetime
+import pandas as pd
 
-  fob_or_dlv  price_change  list_price  full_pallet_price  \
-0                      NaN         NaN                NaN   
-1                      NaN         NaN                NaN   
-2                      NaN         NaN                NaN   
-3                      NaN         NaN                NaN   
-4                      NaN         NaN                NaN   
-5                      NaN         NaN                NaN   
-6                      NaN         NaN                NaN   
-7                      NaN         NaN                NaN   
-8                      NaN         NaN                NaN   
-9                      NaN         NaN                NaN   
+# ----------------------------------------
+# 1) Extraer fecha y ubicación desde pág. 1
+# ----------------------------------------
 
-   half_load_full_pallet_price  full_load_full_pallet_price  \
-0                          NaN                          NaN   
-1                          NaN                          NaN   
-2                          NaN                          NaN   
-3                          NaN                          NaN   
-4                          NaN                          NaN   
-5                          NaN                          NaN   
-6                          NaN                          NaN   
-7                          NaN                          NaN   
-8                          NaN                          NaN   
-9                          NaN                          NaN   
+def effective_date(path):
+    doc  = fitz.open(path)
+    page = doc.load_page(0)
+    # Zona aproximada donde aparece la fecha
+    txt = page.get_text("text", clip=fitz.Rect(0, 50, page.rect.width, 130))
+    m   = re.search(r"\b\d{1,2}/\d{1,2}/(?:\d{2}|\d{4})\b", txt)
+    if not m:
+        return ""
+    for fmt in ("%m/%d/%Y","%m/%d/%y"):
+        try:
+            return datetime.datetime.strptime(m.group(0), fmt).date().isoformat()
+        except:
+            pass
+    return ""
 
-   full_load_best_price plant_location date_inserted source  
-0                   NaN       HUDSON'S    2024-10-07    pdf  
-1                   NaN       HUDSON'S    2024-10-07    pdf  
-2                   NaN       HUDSON'S    2024-10-07    pdf  
-3                   NaN       HUDSON'S    2024-10-07    pdf  
-4                   NaN       HUDSON'S    2024-10-07    pdf  
-5                   NaN       HUDSON'S    2024-10-07    pdf  
-6                   NaN       HUDSON'S    2024-10-07    pdf  
-7                   NaN       HUDSON'S    2024-10-07    pdf  
-8                   NaN       HUDSON'S    2024-10-07    pdf  
-9                   NaN       HUDSON'S    2024-10-07    pdf
+def plant_location(path):
+    doc  = fitz.open(path)
+    page = doc.load_page(0)
+    txt  = page.get_text("text", clip=fitz.Rect(0, 0, page.rect.width, 50)).upper()
+    if "HUDSON'S" in txt:
+        return "HUDSON'S"
+    # toma la primera línea si no contiene Hudson's
+    return txt.split("\n",1)[0].strip().replace(",", "")
+
+# ----------------------------------------
+# 2) Detectar y extraer tablas con pdfplumber
+# ----------------------------------------
+
+def extract_tables(path):
+    """
+    Abre el PDF con pdfplumber, recorre cada página y
+    detecta automáticamente todas las tablas (por líneas).
+    Retorna lista de DataFrames.
+    """
+    dfs = []
+    with pdfplumber.open(path) as pdf:
+        for page in pdf.pages:
+            # encuentra tablas basadas en líneas horizontales/verticales
+            tables = page.find_tables({
+                "vertical_strategy":   "lines",
+                "horizontal_strategy": "lines"
+            })
+            for table in tables:
+                rows = table.extract()
+                if len(rows) <= 1:
+                    continue
+                # la primera fila es encabezado
+                header = [h.strip().lower().replace(" ", "_") for h in rows[0]]
+                data   = rows[1:]
+                dfs.append(pd.DataFrame(data, columns=header))
+    return dfs
+
+# ----------------------------------------
+# 3) Función principal
+# ----------------------------------------
+
+def read_file(path):
+    # (a) extraer tablas
+    tables = extract_tables(path)
+    if not tables:
+        return pd.DataFrame()  # si no hay tablas, devolvemos DF vacío
+
+    # (b) concatenar
+    df = pd.concat(tables, ignore_index=True)
+
+    # (c) detectar columnas numéricas y parsear
+    for col in df.columns:
+        # si todos los valores en la columna son numéricos (incl. decimales o guion final)
+        if df[col].astype(str).str.match(r"^\s*\d+(\.\d+)?-?\s*$").all():
+            # convierte los “100-” en -100 y luego a float
+            df[col] = (
+                df[col]
+                .astype(str)
+                .str.replace(r"-$", "", regex=True)
+                .astype(float)
+                .mul(-1, axis=0)
+                .where(df[col].str.contains(r"-$"), df[col].astype(float))
+            )
+
+    # (d) metadatos
+    df["plant_location"] = plant_location(path)
+    df["date_inserted"]  = effective_date(path)
+    df["source"]         = "pdf"
+
+    # (e) reordenar para que date_inserted & plant_location queden al final
+    cols = [c for c in df.columns if c not in ("plant_location","date_inserted","source")]
+    return df[cols + ["plant_location","date_inserted","source"]]
+
+# ----------------------------------------
+# 4) Ejecución desde la consola
+# ----------------------------------------
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Uso: python purina_parser.py <ruta_al_pdf>")
+        sys.exit(1)
+    pdf_path = sys.argv[1]
+    df_final = read_file(pdf_path)
+
+    print("\n--- TIPOS DEL DATAFRAME ---")
+    print(df_final.dtypes, "\n")
+    print("--- INFO DEL DATAFRAME FINAL ---")
+    print(df_final.info(), "\n")
+    print("--- MUESTRA DE FILAS ---")
+    print(df_final.head())
