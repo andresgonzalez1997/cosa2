@@ -1,35 +1,111 @@
-AttributeError: 'NoneType' object has no attribute 'strip'
-AttributeError                            Traceback (most recent call last)
-/tmp/ipykernel_116/1215835711.py in <module>
-      1 if __name__ == "__main__":
-----> 2     excecute_process()
+import sys
+import re
+import fitz        # pip install pymupdf
+import pdfplumber  # pip install pdfplumber
+import datetime
+import pandas as pd
 
-/tmp/ipykernel_116/4117894532.py in excecute_process()
-     35 
-     36         # Parsear (horizontal)
----> 37         df = pfh.read_file(str(local_pdf_path))
-     38         print("Aqui vienen los types:-----------------")
-     39         print("\n--- TIPOS DEL DATAFRAME ---")
+# ----------------------------------------
+# 1) Extraer fecha y ubicación desde pág. 1
+# ----------------------------------------
 
-~/competitor_data/purina_file_horizontal.py in read_file(path)
-     71 def read_file(path):
-     72     # (a) extraer tablas
----> 73     tables = extract_tables(path)
-     74     if not tables:
-     75         return pd.DataFrame()  # si no hay tablas, devolvemos DF vacío
+def effective_date(path):
+    """
+    Extrae la fecha efectiva (p.ej. 10/07/2024) de la zona y=50..130 pt en página 1.
+    Devuelve ISO 'YYYY-MM-DD' o cadena vacía.
+    """
+    try:
+        doc  = fitz.open(path)
+        page = doc.load_page(0)
+        area = fitz.Rect(0, 50, page.rect.width, 130)
+        text = page.get_text("text", clip=area)
+        m = re.search(r"\b\d{1,2}/\d{1,2}/(?:\d{2}|\d{4})\b", text)
+        if not m:
+            return ""
+        for fmt in ("%m/%d/%Y","%m/%d/%y"):
+            try:
+                return datetime.datetime.strptime(m.group(0), fmt).date().isoformat()
+            except ValueError:
+                continue
+    except Exception:
+        pass
+    return ""
 
-~/competitor_data/purina_file_horizontal.py in extract_tables(path)
-     60                     continue
-     61                 # la primera fila es encabezado
----> 62                 header = [h.strip().lower().replace(" ", "_") for h in rows[0]]
-     63                 data   = rows[1:]
-     64                 dfs.append(pd.DataFrame(data, columns=header))
 
-~/competitor_data/purina_file_horizontal.py in <listcomp>(.0)
-     60                     continue
-     61                 # la primera fila es encabezado
----> 62                 header = [h.strip().lower().replace(" ", "_") for h in rows[0]]
-     63                 data   = rows[1:]
-     64                 dfs.append(pd.DataFrame(data, columns=header))
+def plant_location(path):
+    """
+    Extrae la ubicación de planta (p.ej. "HUDSON'S") de y=0..50 pt en página 1.
+    Devuelve primera línea limpia.
+    """
+    try:
+        doc  = fitz.open(path)
+        page = doc.load_page(0)
+        area = fitz.Rect(0, 0, page.rect.width, 50)
+        text = page.get_text("text", clip=area).upper()
+        if "HUDSON'S" in text:
+            return "HUDSON'S"
+        first = text.split("\n", 1)[0].strip().replace(",", "")
+        return first
+    except Exception:
+        return ""
 
-AttributeError: 'NoneType' object has no attribute 'strip'
+# ----------------------------------------
+# 2) Detectar y extraer tablas con pdfplumber
+# ----------------------------------------
+
+def extract_tables(path):
+    """
+    Abre el PDF y detecta todas las tablas basadas en líneas.
+    Normaliza None→"" en encabezado y celdas.
+    Retorna lista de DataFrames.
+    """
+    dfs = []
+    with pdfplumber.open(path) as pdf:
+        for page in pdf.pages:
+            tables = page.find_tables({
+                "vertical_strategy":   "lines",
+                "horizontal_strategy": "lines"
+            })
+            for table in tables:
+                rows = table.extract()
+                if len(rows) <= 1:
+                    continue
+                # Normalizar header
+                raw_header = rows[0]
+                header = [(h or "").strip().lower().replace(" ", "_") for h in raw_header]
+                # Normalizar datos
+                data = [[cell or "" for cell in row] for row in rows[1:]]
+                # Validar consistencia filas==columnas
+                if all(len(r) == len(header) for r in data):
+                    dfs.append(pd.DataFrame(data, columns=header))
+                else:
+                    print(f"[WARN] tabla ignorada (filas {len(data[0])} != cols {len(header)})")
+    return dfs
+
+# ----------------------------------------
+# 3) Función principal: parsear PDF a DataFrame genérico
+# ----------------------------------------
+
+def read_file(path):
+    # (a) extraer tablas
+    tables = extract_tables(path)
+    if not tables:
+        return pd.DataFrame()
+    # (b) concat
+    df = pd.concat(tables, ignore_index=True)
+    # (c) detectar y parsear columnas numéricas
+    for col in df.columns:
+        if df[col].astype(str).str.match(r"^\s*\d+(?:\.\d+)?-?\s*$").all():
+            # manejar valores con guion al final como negativos
+            series = df[col].astype(str)
+            neg = series.str.endswith("-")
+            vals = series.str.replace(r"-$", "", regex=True).astype(float)
+            df[col] = vals * neg.map({True: -1, False: 1})
+    # (d) metadatos
+    df["plant_location"] = plant_location(path)
+    df["date_inserted"]  = effective_date(path)
+    df["source"]         = "pdf"
+    # (e) reordenar para que metadatos vayan al final
+    cols = [c for c in df.columns if c not in ("plant_location","date_inserted","source")]
+    df = df[cols + ["plant_location","date_inserted","source"]]
+    return df
