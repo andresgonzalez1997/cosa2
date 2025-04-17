@@ -1,228 +1,58 @@
-import datetime
-import pandas as pd
-import tabula
-import re
+ValueError: Length mismatch: Expected axis has 128 elements, new values have 16 elements
+ValueError                                Traceback (most recent call last)
+/tmp/ipykernel_115/1215835711.py in <module>
+      1 if __name__ == "__main__":
+----> 2     excecute_process()
 
-# --------------------------------------------------------------------------------
-# 1) Funciones para fecha y ubicación (parte superior de la página 1)
-# --------------------------------------------------------------------------------
+/tmp/ipykernel_115/4117894532.py in excecute_process()
+     35 
+     36         # Parsear (horizontal)
+---> 37         df = pfh.read_file(str(local_pdf_path))
+     38         print("Aqui vienen los types:-----------------")
+     39         print("\n--- TIPOS DEL DATAFRAME ---")
 
-def effective_date(file_path):
-    """
-    Extrae la fecha (ej. 10/07/2024) desde un área pequeña en la página 1.
-    La retorna en formato YYYY-MM-DD o None si no se encuentra.
-    """
-    try:
-        df_date = tabula.read_pdf(
-            file_path,
-            pages=1,
-            lattice=False,       # No usa líneas, solo stream
-            stream=True,
-            guess=True,
-            area=[50, 0, 130, 600]  # (top=50, left=0, bottom=130, right=600)
-        )
-        if not df_date:
-            return None
+~/competitor_data/purina_file_horizontal.py in read_file(file_path)
+    129     tables     = find_tables_in_pdf(file_path)
+    130     price_list = raw_price_list(tables)
+--> 131     price_list = set_column_names(price_list)
+    132     price_list = add_species_column(price_list)
+    133     price_list = add_meta(price_list, file_path)
 
-        text = str(df_date[0])
-        date_pat = re.compile(r"\d{1,2}/\d{1,2}/(\d{4}|\d{2})")
-        match = date_pat.search(text)
-        if not match:
-            return None
+~/competitor_data/purina_file_horizontal.py in set_column_names(df)
+     65 # ————————————————————————————————————————————————————————————
+     66 def set_column_names(df):
+---> 67     df.columns = H_COLUMNS
+     68     return df
+     69 
 
-        date_str = match.group(0)
-        # Probar parsear con 2 formatos: mm/dd/yyyy y mm/dd/yy
-        for fmt in ("%m/%d/%Y", "%m/%d/%y"):
-            try:
-                dt = datetime.datetime.strptime(date_str, fmt).date()
-                return dt.strftime("%Y-%m-%d")
-            except ValueError:
-                pass
-    except:
-        pass
-    return None
+~/.local/lib/python3.7/site-packages/pandas/core/generic.py in __setattr__(self, name, value)
+   5498         try:
+   5499             object.__getattribute__(self, name)
+-> 5500             return object.__setattr__(self, name, value)
+   5501         except AttributeError:
+   5502             pass
 
-def plant_location(file_path):
-    """
-    Extrae la ubicación (ej. "HUDSON'S") desde un área pequeña en la página 1.
-    Retorna la primera línea, en mayúsculas, o None.
-    """
-    try:
-        df_loc = tabula.read_pdf(
-            file_path,
-            pages=1,
-            lattice=False,
-            stream=True,
-            guess=True,
-            area=[0, 0, 50, 600]  # (top=0, left=0, bottom=50, right=600)
-        )
-        if not df_loc:
-            return None
+~/.local/lib/python3.7/site-packages/pandas/_libs/properties.pyx in pandas._libs.properties.AxisProperty.__set__()
 
-        text = str(df_loc[0]).upper()
-        if "HUDSON'S" in text:
-            return "HUDSON'S"
+~/.local/lib/python3.7/site-packages/pandas/core/generic.py in _set_axis(self, axis, labels)
+    764     def _set_axis(self, axis: int, labels: Index) -> None:
+    765         labels = ensure_index(labels)
+--> 766         self._mgr.set_axis(axis, labels)
+    767         self._clear_item_cache()
+    768 
 
-        first_line = text.split("\n")[0].strip()
-        return first_line.replace(",", "").strip()
-    except:
-        return None
+~/.local/lib/python3.7/site-packages/pandas/core/internals/managers.py in set_axis(self, axis, new_labels)
+    214     def set_axis(self, axis: int, new_labels: Index) -> None:
+    215         # Caller is responsible for ensuring we have an Index object.
+--> 216         self._validate_set_axis(axis, new_labels)
+    217         self.axes[axis] = new_labels
+    218 
 
-# --------------------------------------------------------------------------------
-# 2) Función para extraer la tabla principal de TODAS las páginas
-# --------------------------------------------------------------------------------
+~/.local/lib/python3.7/site-packages/pandas/core/internals/base.py in _validate_set_axis(self, axis, new_labels)
+     56         elif new_len != old_len:
+     57             raise ValueError(
+---> 58                 f"Length mismatch: Expected axis has {old_len} elements, new "
+     59                 f"values have {new_len} elements"
+     60             )
 
-def extract_main_table(file_path):
-    """
-    Extrae la tabla principal en TODAS las páginas,
-    omitiendo ~100 pt superiores para no incluir cabeceras.
-    """
-    try:
-        # Ajuste principal: area=[100, 0, 792, 612] (Carta=612x792)
-        #  - top=100, left=0, bottom=792, right=612
-        # lattice=True para usar líneas de la tabla, guess=False para no 'adivinar'.
-        tables = tabula.read_pdf(
-            file_path,
-            pages="all",
-            lattice=True,
-            guess=False,
-            multiple_tables=True,
-            area=[100, 0, 792, 612]
-        )
-        return tables
-    except Exception as e:
-        print(f"[ERROR extract_main_table]: {e}")
-        return []
-
-# --------------------------------------------------------------------------------
-# 3) Corrección de valores negativos con guion
-# --------------------------------------------------------------------------------
-
-def correct_negative_value(value):
-    """
-    Convierte "100-" en -100 (float). Si no se puede convertir, retorna el valor original.
-    """
-    text = str(value).strip()
-    if text.endswith("-"):
-        num = text[:-1]
-        try:
-            return float(num) * -1
-        except ValueError:
-            return value
-    else:
-        try:
-            return float(text)
-        except ValueError:
-            return value
-
-# --------------------------------------------------------------------------------
-# 4) Función principal: unifica todo, ajusta schema, extrae datos finales
-# --------------------------------------------------------------------------------
-
-def read_file(file_path):
-    """
-    - Extrae la tabla principal (todas las páginas) omitiendo ~100 pt superiores.
-    - Concatena en un DF.
-    - Corrige valores negativos en las columnas numéricas.
-    - Crea/ajusta columnas según 'schema' (string/double).
-    - Inserta 'plant_location', 'date_inserted' y 'source'='pdf'.
-    - Retorna el DF final con las columnas en el orden del 'schema'.
-    """
-
-    # Esquema EXACTO para tu tabla en Hive/CDP
-    schema = {
-        "product_number": "string",
-        "formula_code": "string",
-        "product_name": "string",
-        "product_form": "string",
-        "unit_weight": "double",
-        "pallet_quantity": "double",
-        "stocking_status": "string",
-        "min_order_quantity": "double",
-        "days_lead_time": "double",
-        "fob_or_dlv": "string",
-        "price_change": "double",
-        "list_price": "double",
-        "full_pallet_price": "double",
-        "half_load_full_pallet_price": "double",
-        "full_load_full_pallet_price": "double",
-        "full_load_best_price": "double",
-        "plant_location": "string",
-        "date_inserted": "string",
-        "source": "string"
-    }
-
-    # Columnas numéricas
-    numeric_cols = [col for col, ctype in schema.items() if ctype == "double"]
-
-    # (a) Extrae todas las tablas (páginas)
-    main_tables = extract_main_table(file_path)
-    if not main_tables:
-        print("[WARN] No se extrajo ninguna tabla principal: regresamos DF vacío.")
-        df_empty = pd.DataFrame()
-        for col, col_type in schema.items():
-            if col_type == "double":
-                df_empty[col] = pd.Series(dtype="float")
-            else:
-                df_empty[col] = pd.Series(dtype="object")
-        return df_empty
-
-    # Concatena todos los DataFrames
-    df_main = pd.concat(main_tables, ignore_index=True)
-
-    # (b) Corrige negativos en columnas numéricas
-    for col in numeric_cols:
-        if col in df_main.columns:
-            df_main[col] = df_main[col].apply(correct_negative_value)
-
-    # (c) Asegurar que TODAS las columnas del 'schema' existan y tengan el tipo
-    for col, col_type in schema.items():
-        if col not in df_main.columns:
-            # Crear la columna vacía si no existe
-            if col_type == "double":
-                df_main[col] = pd.Series(dtype="float")
-            else:
-                df_main[col] = pd.Series(dtype="object")
-        else:
-            # Convertir a float o string según sea el caso
-            if col_type == "double":
-                df_main[col] = pd.to_numeric(df_main[col], errors="coerce")
-            else:
-                df_main[col] = df_main[col].astype(str)
-
-    # (d) Agrega 'plant_location', 'date_inserted' y 'source'
-    loc = plant_location(file_path) or ""
-    eff_date = effective_date(file_path) or ""
-
-    df_main["plant_location"] = str(loc)
-    df_main["date_inserted"] = str(eff_date)
-    df_main["source"] = "pdf"
-
-    # Aseguramos tipo string
-    df_main["plant_location"] = df_main["plant_location"].astype(str)
-    df_main["date_inserted"] = df_main["date_inserted"].astype(str)
-    df_main["source"] = df_main["source"].astype(str)
-
-    # (e) Reordenar columnas al orden exacto del 'schema'
-    final_cols = list(schema.keys())  # el orden definido en schema
-    # Si Tabula crea columnas extra, las ignoramos
-    final_cols = [c for c in final_cols if c in df_main.columns]
-    df_final = df_main[final_cols]
-
-    return df_final
-
-# ------------------------------------------------------------------------------
-# Ejemplo de uso, si quieres probar directo:
-# ------------------------------------------------------------------------------
-if __name__ == "__main__":
-    pdf_path = "2024.10.07 Statesville.pdf"  # Ajusta la ruta a tu PDF
-    final_df = read_file(pdf_path)
-
-    print("\n--- INFO DEL DATAFRAME FINAL ---")
-    print(final_df.info())
-    print("\n--- MUESTRA DE FILAS ---")
-    print(final_df.head(20))
-
-    # Si quieres exportarlo a CSV
-    final_df.to_csv("output_statesville.csv", index=False, encoding="utf-8-sig")
-    print("\nGenerado el archivo 'output_statesville.csv'.")
+ValueError: Length mismatch: Expected axis has 128 elements, new values have 16 elements
