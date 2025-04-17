@@ -217,40 +217,58 @@ def read_file(file_path):
 
 
 
-
-
-
-
-
 import fitz  # PyMuPDF
 import datetime
 import re
 import pandas as pd
 
 # --------------------------------------------------------------------------------
-# 1) Funciones para fecha y ubicación (parte superior de la página 1)
+# 0) Esquema de columnas y tipos
+# --------------------------------------------------------------------------------
+SCHEMA = {
+    "product_number": "string",
+    "formula_code": "string",
+    "product_name": "string",
+    "product_form": "string",
+    "unit_weight": "double",
+    "pallet_quantity": "double",
+    "stocking_status": "string",
+    "min_order_quantity": "double",
+    "days_lead_time": "double",
+    "fob_or_dlv": "string",
+    "price_change": "double",
+    "list_price": "double",
+    "full_pallet_price": "double",
+    "half_load_full_pallet_price": "double",
+    "full_load_full_pallet_price": "double",
+    "full_load_best_price": "double",
+    "plant_location": "string",
+    "date_inserted": "string",
+    "source": "string",
+}
+SCHEMA_COLS   = list(SCHEMA.keys())
+NUMERIC_COLS  = [c for c,t in SCHEMA.items() if t == "double"]
+
+# --------------------------------------------------------------------------------
+# 1) Funciones para fecha y ubicación (zona superior página 1)
 # --------------------------------------------------------------------------------
 
 def effective_date(file_path):
     """
-    Extrae la fecha (p.ej. 10/07/2024) desde una zona definida en la página 1.
-    Devuelve la fecha en formato 'YYYY-MM-DD' o None si no la encuentra.
+    Extrae fecha (p.ej. 10/07/2024 → '2024-10-07') desde y=50..130 pt de la página 1.
     """
     try:
-        doc = fitz.open(file_path)
+        doc  = fitz.open(file_path)
         page = doc.load_page(0)
-        # Recorta entre y=50 y y=130 pt para aislar la zona de fecha
-        rect = fitz.Rect(0, 50, page.rect.width, 130)
-        text = page.get_text("text", clip=rect)
-        # Busca mm/dd/yyyy o mm/dd/yy
+        area = fitz.Rect(0,  50, page.rect.width, 130)
+        text = page.get_text("text", clip=area)
         m = re.search(r"\b\d{1,2}/\d{1,2}/(?:\d{4}|\d{2})\b", text)
         if not m:
             return None
         date_str = m.group(0)
         for fmt in ("%m/%d/%Y", "%m/%d/%y"):
             try:
-                dt = datetime.datetime.strptime(date_str, fmt).date()
-                return dt.strftime("%Y-%m-%d")
+                return datetime.datetime.strptime(date_str, fmt).date().strftime("%Y-%m-%d")
             except ValueError:
                 continue
     except Exception:
@@ -259,34 +277,35 @@ def effective_date(file_path):
 
 def plant_location(file_path):
     """
-    Extrae la ubicación (p.ej. "HUDSON'S") desde una zona definida en la página 1.
-    Devuelve la primera línea encontrada (en mayúsculas), o None si falla.
+    Extrae ubicación (p.ej. "HUDSON'S") desde y=0..50 pt de la página 1.
     """
     try:
-        doc = fitz.open(file_path)
+        doc  = fitz.open(file_path)
         page = doc.load_page(0)
-        # Recorta entre y=0 y y=50 pt para aislar la zona de ubicación
-        rect = fitz.Rect(0, 0, page.rect.width, 50)
-        text = page.get_text("text", clip=rect).upper()
+        area = fitz.Rect(0, 0, page.rect.width, 50)
+        text = page.get_text("text", clip=area).upper()
         if "HUDSON'S" in text:
             return "HUDSON'S"
-        primera = text.split("\n")[0].strip()
-        return primera.replace(",", "").strip()
+        first = text.split("\n")[0].strip()
+        return first.replace(",", "").strip()
     except Exception:
         return None
 
 # --------------------------------------------------------------------------------
-# 2) Función para extraer la “tabla” de TODAS las páginas
+# 2) Extracción de la “tabla” de todas las páginas (texto libre + split)
 # --------------------------------------------------------------------------------
 
 def extract_main_table(file_path, header_offset=100):
     """
-    Lee cada página recortando los primeros header_offset pt para omitir cabeceras,
-    luego divide cada línea por 2+ espacios y normaliza las filas.
-    Devuelve lista con un solo DataFrame resultante.
+    - Recorta cada página entre y=header_offset..final.
+    - Toma línea a línea y hace split por 2+ espacios.
+    - Salta cualquier línea vacía o que contenga el encabezado PDF.
+    - Normaliza a len(SCHEMA_COLS) columnas.
+    - Devuelve [DataFrame] listo para concatenar.
     """
     rows = []
     doc = fitz.open(file_path)
+
     for page in doc:
         clip = fitz.Rect(0, header_offset, page.rect.width, page.rect.height)
         text = page.get_text("text", clip=clip)
@@ -294,48 +313,42 @@ def extract_main_table(file_path, header_offset=100):
             line = line.strip()
             if not line:
                 continue
-            # Divide donde hay 2 o más espacios consecutivos
+            # evita repetir el header si aparece en cada página
+            if re.match(r"^\s*product\s+number", line, re.IGNORECASE):
+                continue
             cols = re.split(r"\s{2,}", line)
             rows.append(cols)
 
     if not rows:
         return []
 
-    # Cabecera en la primera fila
-    header = rows[0]
-    n_cols = len(header)
-    # Diagnóstico de distribuciones de columnas
-    lengths = sorted(set(len(r) for r in rows))
-    print(f"[DEBUG] Longitudes de fila encontradas: {lengths}")
-
-    # Normaliza datos: igual número de columnas por fila
+    # normalizamos cada fila al número de columnas del esquema
+    n_cols = len(SCHEMA_COLS)
     data = []
-    for r in rows[1:]:
+    for r in rows:
         if len(r) < n_cols:
             r = r + [""] * (n_cols - len(r))
         elif len(r) > n_cols:
-            # Agrupa el exceso en la última columna
-            r = r[: n_cols - 1] + [" ".join(r[n_cols - 1 :])]
+            # agrupa el exceso en la última columna
+            r = r[:n_cols-1] + [" ".join(r[n_cols-1:])]
         data.append(r)
 
-    # Normaliza nombres de columnas
-    cols_norm = [h.lower().strip().replace(" ", "_") for h in header]
-    df = pd.DataFrame(data, columns=cols_norm)
+    # construye DataFrame usando exactamente los nombres del esquema
+    df = pd.DataFrame(data, columns=SCHEMA_COLS)
     return [df]
 
 # --------------------------------------------------------------------------------
-# 3) Corrección de valores negativos con guion
+# 3) Corrección de valores negativos
 # --------------------------------------------------------------------------------
 
 def correct_negative_value(value):
     """
-    Convierte "100-" en -100 (float). Si falla, retorna el valor original.
+    "100-" → -100.0 ; intento también float("123") → 123.0
     """
     txt = str(value).strip()
     if txt.endswith("-"):
-        num = txt[:-1]
         try:
-            return float(num) * -1
+            return -float(txt[:-1])
         except ValueError:
             return value
     try:
@@ -344,61 +357,29 @@ def correct_negative_value(value):
         return value
 
 # --------------------------------------------------------------------------------
-# 4) Función principal: unifica todo, ajusta esquema, extrae datos finales
+# 4) Función principal: unifica, limpia y ajusta tipos
 # --------------------------------------------------------------------------------
 
 def read_file(file_path):
-    """
-    - Extrae la tabla principal con extract_main_table()
-    - Concatena en un DataFrame
-    - Corrige valores negativos
-    - Asegura columnas según schema (tipos y existencia)
-    - Agrega plant_location, date_inserted y source
-    - Reordena columnas al orden del schema
-    - Devuelve el DataFrame final
-    """
-    schema = {
-        "product_number": "string",
-        "formula_code": "string",
-        "product_name": "string",
-        "product_form": "string",
-        "unit_weight": "double",
-        "pallet_quantity": "double",
-        "stocking_status": "string",
-        "min_order_quantity": "double",
-        "days_lead_time": "double",
-        "fob_or_dlv": "string",
-        "price_change": "double",
-        "list_price": "double",
-        "full_pallet_price": "double",
-        "half_load_full_pallet_price": "double",
-        "full_load_full_pallet_price": "double",
-        "full_load_best_price": "double",
-        "plant_location": "string",
-        "date_inserted": "string",
-        "source": "string",
-    }
-    numeric_cols = [c for c, t in schema.items() if t == "double"]
-
-    # a) Extraer tablas
+    # a) extraer
     tables = extract_main_table(file_path)
     if not tables:
-        print("[WARN] No se extrajo ninguna tabla; devolviendo DataFrame vacío.")
+        print("[WARN] No se extrajo tabla; devolviendo vacío.")
         return pd.DataFrame({
-            col: pd.Series(dtype="float" if typ=="double" else "object")
-            for col,typ in schema.items()
+            col: pd.Series(dtype="float" if SCHEMA[col]=="double" else "object")
+            for col in SCHEMA_COLS
         })
 
-    # b) Concatenar
+    # b) concatenar
     df = pd.concat(tables, ignore_index=True)
 
-    # c) Corregir negativos
-    for col in numeric_cols:
+    # c) limpiar negativos
+    for col in NUMERIC_COLS:
         if col in df.columns:
             df[col] = df[col].apply(correct_negative_value)
 
-    # d) Asegurar todas las columnas y sus tipos
-    for col, typ in schema.items():
+    # d) asegurar columnas del esquema y tipos
+    for col, typ in SCHEMA.items():
         if col not in df.columns:
             df[col] = pd.Series(dtype="float" if typ=="double" else "object")
         else:
@@ -407,18 +388,16 @@ def read_file(file_path):
             else:
                 df[col] = df[col].astype(str)
 
-    # e) Agregar metadatos
+    # e) agregar metadatos
     df["plant_location"] = plant_location(file_path) or ""
     df["date_inserted"]  = effective_date(file_path) or ""
     df["source"]         = "pdf"
 
-    # f) Reordenar columnas según el schema
-    final_order = [c for c in schema.keys() if c in df.columns]
-    return df[final_order]
-
+    # f) reordenar
+    return df[SCHEMA_COLS]
 
 # --------------------------------------------------------------------------------
-# 5) Bloque principal de ejecución
+# 5) Ejecución desde terminal
 # --------------------------------------------------------------------------------
 
 if __name__ == "__main__":
@@ -430,10 +409,10 @@ if __name__ == "__main__":
     pdf_path = sys.argv[1]
     df_final = read_file(pdf_path)
 
-    # Salida de diagnóstico
     print("\n--- TIPOS DEL DATAFRAME ---")
     print(df_final.dtypes, "\n")
     print("--- INFO DEL DATAFRAME FINAL ---")
     print(df_final.info(), "\n")
     print("--- MUESTRA DE FILAS ---")
     print(df_final.head())
+
