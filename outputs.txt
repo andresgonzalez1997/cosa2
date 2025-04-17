@@ -1,89 +1,196 @@
---- INFO DEL DATAFRAME FINAL ---
-<class 'pandas.core.frame.DataFrame'>
-RangeIndex: 4722 entries, 0 to 4721
-Data columns (total 19 columns):
- #   Column                       Non-Null Count  Dtype  
----  ------                       --------------  -----  
- 0   product_number               4722 non-null   object 
- 1   formula_code                 4722 non-null   object 
- 2   product_name                 4722 non-null   object 
- 3   product_form                 4722 non-null   object 
- 4   unit_weight                  0 non-null      float64
- 5   pallet_quantity              0 non-null      float64
- 6   stocking_status              4722 non-null   object 
- 7   min_order_quantity           0 non-null      float64
- 8   days_lead_time               0 non-null      float64
- 9   fob_or_dlv                   4722 non-null   object 
- 10  price_change                 0 non-null      float64
- 11  list_price                   0 non-null      float64
- 12  full_pallet_price            0 non-null      float64
- 13  half_load_full_pallet_price  0 non-null      float64
- 14  full_load_full_pallet_price  0 non-null      float64
- 15  full_load_best_price         0 non-null      float64
- 16  plant_location               4722 non-null   object 
- 17  date_inserted                4722 non-null   object 
- 18  source                       4722 non-null   object 
-dtypes: float64(10), object(9)
-memory usage: 701.0+ KB
-None
+import fitz      # pip install pymupdf
+import datetime
+import re
+import pandas as pd
+import sys
 
---- MUESTRA DE FILAS ---
-        product_number formula_code product_name product_form  unit_weight  \
-0  Price in US Dollars                                                 NaN   
-1              PRODUCT                                                 NaN   
-2               NUMBER                                                 NaN   
-3              FORMULA                                                 NaN   
-4                 CODE                                                 NaN   
-5        PRODUCT DESC.                                                 NaN   
-6              PRODUCT                                                 NaN   
-7                 FORM                                                 NaN   
-8                 UNIT                                                 NaN   
-9               WEIGHT                                                 NaN   
+# --------------------------------------------------------------------------------
+# 0) Esquema de columnas y tipos
+# --------------------------------------------------------------------------------
+SCHEMA = {
+    "product_number": "string",
+    "formula_code": "string",
+    "product_name": "string",
+    "product_form": "string",
+    "unit_weight": "double",
+    "pallet_quantity": "double",
+    "stocking_status": "string",
+    "min_order_quantity": "double",
+    "days_lead_time": "double",
+    "fob_or_dlv": "string",
+    "price_change": "double",
+    "list_price": "double",
+    "full_pallet_price": "double",
+    "half_load_full_pallet_price": "double",
+    "full_load_full_pallet_price": "double",
+    "full_load_best_price": "double",
+    "plant_location": "string",
+    "date_inserted": "string",
+    "source": "string"
+}
+SCHEMA_COLS  = list(SCHEMA.keys())
+NUMERIC_COLS = [c for c,t in SCHEMA.items() if t == "double"]
 
-   pallet_quantity stocking_status  min_order_quantity  days_lead_time  \
-0              NaN                                 NaN             NaN   
-1              NaN                                 NaN             NaN   
-2              NaN                                 NaN             NaN   
-3              NaN                                 NaN             NaN   
-4              NaN                                 NaN             NaN   
-5              NaN                                 NaN             NaN   
-6              NaN                                 NaN             NaN   
-7              NaN                                 NaN             NaN   
-8              NaN                                 NaN             NaN   
-9              NaN                                 NaN             NaN   
+# --------------------------------------------------------------------------------
+# 1) Funciones para extraer fecha y ubicación (página 1)
+# --------------------------------------------------------------------------------
 
-  fob_or_dlv  price_change  list_price  full_pallet_price  \
-0                      NaN         NaN                NaN   
-1                      NaN         NaN                NaN   
-2                      NaN         NaN                NaN   
-3                      NaN         NaN                NaN   
-4                      NaN         NaN                NaN   
-5                      NaN         NaN                NaN   
-6                      NaN         NaN                NaN   
-7                      NaN         NaN                NaN   
-8                      NaN         NaN                NaN   
-9                      NaN         NaN                NaN   
+def effective_date(path):
+    try:
+        doc  = fitz.open(path)
+        page = doc.load_page(0)
+        area = fitz.Rect(0, 50, page.rect.width, 130)
+        txt  = page.get_text("text", clip=area)
+        m = re.search(r"\b\d{1,2}/\d{1,2}/(?:\d{4}|\d{2})\b", txt)
+        if not m: return None
+        ds = m.group(0)
+        for fmt in ("%m/%d/%Y", "%m/%d/%y"):
+            try:
+                return datetime.datetime.strptime(ds, fmt).date().strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+    except:
+        pass
+    return None
 
-   half_load_full_pallet_price  full_load_full_pallet_price  \
-0                          NaN                          NaN   
-1                          NaN                          NaN   
-2                          NaN                          NaN   
-3                          NaN                          NaN   
-4                          NaN                          NaN   
-5                          NaN                          NaN   
-6                          NaN                          NaN   
-7                          NaN                          NaN   
-8                          NaN                          NaN   
-9                          NaN                          NaN   
+def plant_location(path):
+    try:
+        doc  = fitz.open(path)
+        page = doc.load_page(0)
+        area = fitz.Rect(0, 0, page.rect.width, 50)
+        txt  = page.get_text("text", clip=area).upper()
+        if "HUDSON'S" in txt:
+            return "HUDSON'S"
+        first = txt.split("\n")[0].strip()
+        return first.replace(",", "").strip()
+    except:
+        return None
 
-   full_load_best_price plant_location date_inserted source  
-0                   NaN       HUDSON'S    2024-10-07    pdf  
-1                   NaN       HUDSON'S    2024-10-07    pdf  
-2                   NaN       HUDSON'S    2024-10-07    pdf  
-3                   NaN       HUDSON'S    2024-10-07    pdf  
-4                   NaN       HUDSON'S    2024-10-07    pdf  
-5                   NaN       HUDSON'S    2024-10-07    pdf  
-6                   NaN       HUDSON'S    2024-10-07    pdf  
-7                   NaN       HUDSON'S    2024-10-07    pdf  
-8                   NaN       HUDSON'S    2024-10-07    pdf  
-9                   NaN       HUDSON'S    2024-10-07    pdf  
+# --------------------------------------------------------------------------------
+# 2) Extracción de la “tabla” real
+# --------------------------------------------------------------------------------
+
+def extract_main_table(path, header_offset=100):
+    """
+    - Recorta cada página por debajo de y=header_offset para omitir cabecera.
+    - Salta líneas de header hasta encontrarse la primera línea con dígitos.
+    - Luego, split por 2+ espacios, normaliza a len(SCHEMA_COLS) columnas.
+    - Devuelve [DataFrame].
+    """
+    rows = []
+    data_started = False
+
+    doc = fitz.open(path)
+    for page in doc:
+        clip = fitz.Rect(0, header_offset, page.rect.width, page.rect.height)
+        text = page.get_text("text", clip=clip)
+        for line in text.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+
+            # Si aún no hemos empezado datos, esperar a la 1ª línea con dígitos
+            if not data_started:
+                if re.search(r"\d", line) and not re.search(
+                    r"price in us dollars|product number|formula code|product desc|product form|unit weight|pallet quantity|stocking status",
+                    line, re.I):
+                    data_started = True
+                else:
+                    continue
+
+            # A partir de aquí ya es dato: dividimos por 2+ espacios
+            cols = re.split(r"\s{2,}", line)
+            rows.append(cols)
+
+    if not rows:
+        return []
+
+    # Normalizar cada fila al número exacto de columnas del esquema
+    n = len(SCHEMA_COLS)
+    cleaned = []
+    for r in rows:
+        if len(r) < n:
+            r = r + [""] * (n - len(r))
+        elif len(r) > n:
+            # Si sobran, concatenar el exceso en la última columna
+            r = r[: n - 1] + [" ".join(r[n - 1 :])]
+        cleaned.append(r)
+
+    # Construir DataFrame con las columnas del esquema
+    df = pd.DataFrame(cleaned, columns=SCHEMA_COLS)
+    return [df]
+
+# --------------------------------------------------------------------------------
+# 3) Corrección de negativos y parseo de números
+# --------------------------------------------------------------------------------
+
+def correct_negative_value(v):
+    txt = str(v).strip()
+    if txt.endswith("-"):
+        try:
+            return -float(txt[:-1])
+        except:
+            return v
+    try:
+        return float(txt)
+    except:
+        return v
+
+# --------------------------------------------------------------------------------
+# 4) Función principal: unifica todo y da el DF final
+# --------------------------------------------------------------------------------
+
+def read_file(path):
+    # a) extraer tabla
+    tables = extract_main_table(path)
+    if not tables:
+        # devolvemos un DF vacío con todas las columnas del esquema
+        return pd.DataFrame({
+            c: pd.Series(dtype="float" if SCHEMA[c]=="double" else "object")
+            for c in SCHEMA_COLS
+        })
+
+    # b) concatenar
+    df = pd.concat(tables, ignore_index=True)
+
+    # c) corregir negativos en columnas numéricas
+    for col in NUMERIC_COLS:
+        if col in df.columns:
+            df[col] = df[col].apply(correct_negative_value)
+
+    # d) asegurar existencia y tipo de todas las columnas
+    for col, typ in SCHEMA.items():
+        if col not in df.columns:
+            df[col] = pd.Series(dtype="float" if typ=="double" else "object")
+        else:
+            if typ == "double":
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            else:
+                df[col] = df[col].astype(str)
+
+    # e) metadatos
+    df["plant_location"] = plant_location(path) or ""
+    df["date_inserted"]  = effective_date(path) or ""
+    df["source"]         = "pdf"
+
+    # f) reordenar al esquema y listo
+    return df[SCHEMA_COLS]
+
+# --------------------------------------------------------------------------------
+# 5) Ejecución desde la consola
+# --------------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Uso: python purina_parser.py <ruta_al_pdf>")
+        sys.exit(1)
+
+    pdf_path = sys.argv[1]
+    df_final = read_file(pdf_path)
+
+    print("\n--- TIPOS DEL DATAFRAME ---")
+    print(df_final.dtypes, "\n")
+    print("--- INFO DEL DATAFRAME FINAL ---")
+    print(df_final.info(), "\n")
+    print("--- MUESTRA DE FILAS ---")
+    print(df_final.head())
