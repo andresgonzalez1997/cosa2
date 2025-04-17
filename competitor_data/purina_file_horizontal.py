@@ -223,10 +223,10 @@ def read_file(file_path):
 
 
 
+import fitz  # PyMuPDF
 import datetime
 import re
 import pandas as pd
-import camelot
 
 # --------------------------------------------------------------------------------
 # 1) Funciones para fecha y ubicación (parte superior de la página 1)
@@ -238,67 +238,43 @@ def effective_date(file_path):
     La retorna en formato YYYY-MM-DD o None si no se encuentra.
     """
     try:
-        # Coordenadas adaptadas de Tabula [top, left, bottom, right] 
-        # a Camelot ["x1,y1,x2,y2"] (origin en la esquina inferior izquierda).
-        # Para página carta (792 pt de altura):
-        #   área Tabula [50, 0, 130, 600] → Camelot "0,662,600,742"
-        tables = camelot.read_pdf(
-            file_path,
-            pages="1",
-            flavor="stream",
-            table_areas=["0,662,600,742"],
-            strip_text="\n"
-        )
-        if len(tables) == 0:
+        doc = fitz.open(file_path)
+        page = doc.load_page(0)  # página 1
+        # Tabula usaba [top, left, bottom, right] = [50, 0, 130, 600]
+        # En PyMuPDF: Rect(x0, y0, x1, y1) con origen en esquina superior izquierda
+        rect = fitz.Rect(0, 50, 600, 130)
+        text = page.get_text("text", clip=rect)
+        # Buscar patrón de fecha
+        date_pat = re.compile(r"\d{1,2}/\d{1,2}/(?:\d{4}|\d{2})")
+        m = date_pat.search(text)
+        if not m:
             return None
-
-        # Tomamos la primera tabla y la convertimos a texto plano
-        df_date = tables[0].df
-        text = "\n".join(df_date.fillna("").astype(str).values.flatten())
-
-        # Buscamos patrón de fecha mm/dd/yyyy o mm/dd/yy
-        date_pat = re.compile(r"\d{1,2}/\d{1,2}/(\d{4}|\d{2})")
-        match = date_pat.search(text)
-        if not match:
-            return None
-
-        date_str = match.group(0)
+        date_str = m.group(0)
         for fmt in ("%m/%d/%Y", "%m/%d/%y"):
             try:
                 dt = datetime.datetime.strptime(date_str, fmt).date()
                 return dt.strftime("%Y-%m-%d")
             except ValueError:
-                continue
+                pass
     except Exception:
         pass
-
     return None
 
 def plant_location(file_path):
     """
     Extrae la ubicación (ej. "HUDSON'S") desde un área pequeña en la página 1.
-    Retorna la primera línea en mayúsculas o None.
+    Retorna la primera línea, en mayúsculas, o None si falla.
     """
     try:
-        # Área Tabula [0, 0, 50, 600] → Camelot "0,742,600,792"
-        tables = camelot.read_pdf(
-            file_path,
-            pages="1",
-            flavor="stream",
-            table_areas=["0,742,600,792"],
-            strip_text="\n"
-        )
-        if len(tables) == 0:
-            return None
-
-        df_loc = tables[0].df
-        text = "\n".join(df_loc.fillna("").astype(str).values.flatten()).upper()
-
+        doc = fitz.open(file_path)
+        page = doc.load_page(0)
+        # Tabula [0, 0, 50, 600] → Rect(0, 0, 600, 50)
+        rect = fitz.Rect(0, 0, 600, 50)
+        text = page.get_text("text", clip=rect).upper()
         if "HUDSON'S" in text:
             return "HUDSON'S"
-
-        first_line = text.split("\n")[0].strip()
-        return first_line.replace(",", "").strip()
+        first = text.split("\n")[0].strip()
+        return first.replace(",", "").strip()
     except Exception:
         return None
 
@@ -308,21 +284,36 @@ def plant_location(file_path):
 
 def extract_main_table(file_path):
     """
-    Extrae la tabla principal en TODAS las páginas usando líneas de cuadrícula.
-    Retorna una lista de DataFrames, uno por cada tabla detectada.
+    Extrae la tabla principal en TODAS las páginas:
+      - Descarta los primeros ~100 pt para omitir cabecera
+      - Extrae texto, línea a línea
+      - Divide en columnas separando por 2+ espacios
+    Retorna lista de DataFrames (uno por cada PDF completo, aquí un solo DF).
     """
-    try:
-        tables = camelot.read_pdf(
-            file_path,
-            pages="1-end",
-            flavor="lattice",
-            strip_text="\n"
-        )
-        # Devolvemos solo los DataFrames
-        return [t.df for t in tables]
-    except Exception as e:
-        print(f"[ERROR extract_main_table]: {e}")
+    rows = []
+    doc = fitz.open(file_path)
+    header_offset = 100  # altura en pt a descartar
+    for page in doc:
+        rect = fitz.Rect(0, header_offset, page.rect.width, page.rect.height)
+        txt = page.get_text("text", clip=rect)
+        for line in txt.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            # Ajusta este split si tu tabla usa otro separador
+            cols = re.split(r"\s{2,}", line)
+            rows.append(cols)
+
+    if not rows:
         return []
+
+    # Primera fila como cabeceras
+    raw_headers = rows[0]
+    # Normalizamos nombres: minuscula, espacios→_
+    headers = [h.lower().strip().replace(" ", "_") for h in raw_headers]
+    data = rows[1:]
+    df = pd.DataFrame(data, columns=headers)
+    return [df]
 
 # --------------------------------------------------------------------------------
 # 3) Corrección de valores negativos con guion
@@ -330,7 +321,8 @@ def extract_main_table(file_path):
 
 def correct_negative_value(value):
     """
-    Convierte "100-" en -100 (float). Si no se puede convertir, retorna el valor original.
+    Convierte "100-" en -100 (float). 
+    Si falla, retorna el valor original.
     """
     text = str(value).strip()
     if text.endswith("-"):
@@ -339,11 +331,10 @@ def correct_negative_value(value):
             return float(num) * -1
         except ValueError:
             return value
-    else:
-        try:
-            return float(text)
-        except ValueError:
-            return value
+    try:
+        return float(text)
+    except ValueError:
+        return value
 
 # --------------------------------------------------------------------------------
 # 4) Función principal: unifica todo, ajusta schema, extrae datos finales
@@ -351,15 +342,14 @@ def correct_negative_value(value):
 
 def read_file(file_path):
     """
-    - Extrae la tabla principal (todas las páginas) omitiendo ~100 pt superiores.
-    - Concatena en un DF.
-    - Corrige valores negativos en las columnas numéricas.
-    - Crea/ajusta columnas según 'schema' (string/double).
-    - Inserta 'plant_location', 'date_inserted' y 'source'='pdf'.
-    - Retorna el DF final con las columnas en el orden del 'schema'.
+    - Extrae la tabla principal (todas las páginas).
+    - Concatena en un DataFrame.
+    - Corrige valores negativos.
+    - Aplica schema (tipos, columnas faltantes).
+    - Agrega plant_location, date_inserted y source.
+    - Retorna el DataFrame final.
     """
 
-    # Esquema EXACTO para tu tabla en Hive/CDP
     schema = {
         "product_number": "string",
         "formula_code": "string",
@@ -381,50 +371,40 @@ def read_file(file_path):
         "date_inserted": "string",
         "source": "string"
     }
+    numeric_cols = [c for c,t in schema.items() if t=="double"]
 
-    # Columnas numéricas
-    numeric_cols = [col for col, ctype in schema.items() if ctype == "double"]
-
-    # (a) Extrae todas las tablas (páginas)
-    main_tables = extract_main_table(file_path)
-    if not main_tables:
-        print("[WARN] No se extrajo ninguna tabla principal: regresamos DF vacío.")
-        # Generar DF vacío con schema
-        df_empty = pd.DataFrame({
-            col: pd.Series(dtype="float" if typ=="double" else "object")
-            for col, typ in schema.items()
+    # (a) Extraer tablas
+    tables = extract_main_table(file_path)
+    if not tables:
+        print("[WARN] No se extrajo tabla principal, devolviendo vacío")
+        return pd.DataFrame({
+            col: pd.Series(dtype="float" if t=="double" else "object")
+            for col,t in schema.items()
         })
-        return df_empty
 
-    # (b) Concatena todos los DataFrames
-    df_main = pd.concat(main_tables, ignore_index=True)
+    # (b) Concatenar
+    df = pd.concat(tables, ignore_index=True)
 
-    # (c) Corrige negativos en columnas numéricas
+    # (c) Limpiar negativos
     for col in numeric_cols:
-        if col in df_main.columns:
-            df_main[col] = df_main[col].apply(correct_negative_value)
+        if col in df.columns:
+            df[col] = df[col].apply(correct_negative_value)
 
-    # (d) Asegurar que TODAS las columnas del 'schema' existan y tengan el tipo correcto
-    for col, col_type in schema.items():
-        if col not in df_main.columns:
-            # Crear la columna vacía si no existe
-            df_main[col] = pd.Series(dtype="float" if col_type=="double" else "object")
+    # (d) Asegurar todas las columnas y tipos
+    for col, typ in schema.items():
+        if col not in df.columns:
+            df[col] = pd.Series(dtype="float" if typ=="double" else "object")
         else:
-            # Convertir a float o string según sea el caso
-            if col_type == "double":
-                df_main[col] = pd.to_numeric(df_main[col], errors="coerce")
+            if typ=="double":
+                df[col] = pd.to_numeric(df[col], errors="coerce")
             else:
-                df_main[col] = df_main[col].astype(str)
+                df[col] = df[col].astype(str)
 
-    # (e) Agrega 'plant_location', 'date_inserted' y 'source'
-    loc = plant_location(file_path) or ""
-    eff_date = effective_date(file_path) or ""
-    df_main["plant_location"] = str(loc)
-    df_main["date_inserted"]   = str(eff_date)
-    df_main["source"]          = "pdf"
+    # (e) Agregar metadatos
+    df["plant_location"] = plant_location(file_path) or ""
+    df["date_inserted"] = effective_date(file_path) or ""
+    df["source"]        = "pdf"
 
-    # (f) Reordenar columnas al orden exacto del 'schema'
-    final_cols = [c for c in schema.keys() if c in df_main.columns]
-    df_final = df_main[final_cols]
-
-    return df_final
+    # (f) Reordenar columnas según schema
+    final_cols = [c for c in schema.keys() if c in df.columns]
+    return df[final_cols]
