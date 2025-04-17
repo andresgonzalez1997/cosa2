@@ -1,151 +1,92 @@
 #!/usr/bin/env python3
-# competitor_data/purina_file_horizontal.py
+# quick_statesville.py
 
 import sys
 import re
-import fitz        # pip install pymupdf
-import pdfplumber  # pip install pdfplumber
 import datetime
 import pandas as pd
-
-# ----------------------------------------
-# 0) Esquema de columnas (sin datos quemados)
-# ----------------------------------------
-# Se detecta dinámicamente el header de cada PDF y se normaliza.
-
-# ----------------------------------------
-# 1) Funciones de metadatos (fecha y ubicación)
-# ----------------------------------------
+import fitz       # pip install pymupdf
+import tabula     # pip install tabula-py
 
 def effective_date(path):
     """
-    Extrae la fecha efectiva (mm/dd/yyyy o mm/dd/yy) de la página 1,
-    zona aproximada (y=50..130). Devuelve ISO formato o ''
+    Extrae la fecha (p.ej. 10/07/2024) de la zona y=50..130 pt en la página 1.
+    Devuelve ISO 'YYYY‑MM‑DD' o cadena vacía.
     """
     try:
         doc  = fitz.open(path)
         page = doc.load_page(0)
-        area = fitz.Rect(0, 50, page.rect.width, 130)
-        text = page.get_text("text", clip=area)
-        m = re.search(r"\b\d{1,2}/\d{1,2}/(?:\d{2}|\d{4})\b", text)
+        clip = fitz.Rect(0, 50, page.rect.width, 130)
+        txt  = page.get_text("text", clip=clip)
+        m    = re.search(r"\b\d{1,2}/\d{1,2}/(?:\d{2}|\d{4})\b", txt)
         if not m:
-            return ''
-        for fmt in ('%m/%d/%Y','%m/%d/%y'):
+            return ""
+        for fmt in ("%m/%d/%Y", "%m/%d/%y"):
             try:
                 return datetime.datetime.strptime(m.group(0), fmt).date().isoformat()
             except ValueError:
                 continue
     except Exception:
         pass
-    return ''
-
+    return ""
 
 def plant_location(path):
     """
-    Extrae la ubicación de planta (p.ej. "HUDSON'S") de la página 1,
-    zona aproximada (y=0..50). Devuelve texto limpio.
+    Extrae la ubicación de planta (p.ej. "HUDSON'S") de la zona y=0..50 pt en la página 1.
+    Devuelve la primera línea limpia.
     """
     try:
         doc  = fitz.open(path)
         page = doc.load_page(0)
-        area = fitz.Rect(0, 0, page.rect.width, 50)
-        text = page.get_text("text", clip=area).upper()
-        if "HUDSON'S" in text:
+        clip = fitz.Rect(0, 0, page.rect.width, 50)
+        txt  = page.get_text("text", clip=clip).upper()
+        if "HUDSON'S" in txt:
             return "HUDSON'S"
-        first = text.split("\n",1)[0].strip().replace(",", "")
-        return first
+        return txt.split("\n", 1)[0].strip().replace(",", "")
     except Exception:
-        return ''
-
-# ----------------------------------------
-# 2) Extracción genérica de tablas
-# ----------------------------------------
-
-def extract_tables(path):
-    """
-    Usa pdfplumber para detectar tablas basadas en líneas en todas las páginas.
-    Normaliza None→'' en encabezados y celdas.
-    Retorna una lista de DataFrames.
-    """
-    dfs = []
-    with pdfplumber.open(path) as pdf:
-        for page in pdf.pages:
-            tables = page.find_tables({
-                'vertical_strategy':   'lines',
-                'horizontal_strategy': 'lines'
-            })
-            for table in tables:
-                rows = table.extract()
-                # Saltar si no hay datos
-                if len(rows) <= 1:
-                    continue
-                # Normalizar header
-                raw_header = rows[0]
-                header = [(h or '').strip().lower().replace(' ', '_')
-                          for h in raw_header]
-                # Normalizar datos
-                data = [[cell or '' for cell in row] for row in rows[1:]]
-                # Validar filas iguales a columnas
-                if all(len(r) == len(header) for r in data):
-                    dfs.append(pd.DataFrame(data, columns=header))
-                else:
-                    # En caso de inconsistencia, intenta recortar o rellenar
-                    normalized = []
-                    n = len(header)
-                    for r in data:
-                        if len(r) < n:
-                            r = r + ['']*(n-len(r))
-                        elif len(r) > n:
-                            r = r[:n-1] + [' '.join(r[n-1:])]
-                        normalized.append(r)
-                    dfs.append(pd.DataFrame(normalized, columns=header))
-    return dfs
-
-# ----------------------------------------
-# 3) Pipeline principal
-# ----------------------------------------
+        return ""
 
 def read_file(path):
     """
-    - Extrae tablas genéricas
-    - Concatena en un DataFrame
-    - Detecta y parsea columnas numéricas
-    - Agrega plant_location, date_inserted, source
-    - Reordena metadatos al final
+    1) Usa tabula-py para leer TODO el PDF en un solo DataFrame.
+    2) Normaliza nombres de columnas.
+    3) Agrega plant_location, date_inserted y source.
     """
-    tables = extract_tables(path)
-    if not tables:
-        return pd.DataFrame()
-    df = pd.concat(tables, ignore_index=True)
-    # Detectar columnas numéricas por regex y convertir
-    for col in df.columns:
-        # Patrón: dígitos, opcional decimal, opcional guion al final
-        if df[col].astype(str).str.match(r"^\s*\d+(?:\.\d+)?-?\s*$").all():
-            s = df[col].astype(str)
-            neg_mask = s.str.endswith('-')
-            nums = s.str.replace(r"-$", "", regex=True).astype(float)
-            df[col] = nums.where(~neg_mask, -nums)
-    # Metadatos
-    df['plant_location'] = plant_location(path)
-    df['date_inserted']  = effective_date(path)
-    df['source']         = 'pdf'
-    # Reordenar columnas: datos primero, luego metadatos
-    cols = [c for c in df.columns if c not in ('plant_location','date_inserted','source')]
-    return df[cols + ['plant_location','date_inserted','source']]
+    # Lee todo el PDF sin dividir en múltiples tablas
+    dfs = tabula.read_pdf(
+        path,
+        pages="all",
+        guess=True,
+        multiple_tables=False
+    )
+    if not dfs:
+        raise RuntimeError("Tabula no extrajo ninguna tabla del PDF.")
 
-# ----------------------------------------
-# 4) Ejecución
-# ----------------------------------------
+    df = dfs[0]
 
-if __name__ == '__main__':
+    # Normaliza nombres de columnas: strip, lowercase, espacios→_
+    df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+
+    # Agrega metadatos
+    df["plant_location"] = plant_location(path)
+    df["date_inserted"]  = effective_date(path)
+    df["source"]         = "pdf"
+
+    return df
+
+if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print('Uso: python purina_file_horizontal.py <ruta_al_pdf>')
+        print("Uso: python quick_statesville.py <ruta_al_pdf>")
         sys.exit(1)
+
     pdf_path = sys.argv[1]
-    df_final = read_file(pdf_path)
+    df = read_file(pdf_path)
+
     print("\n--- TIPOS DEL DATAFRAME ---")
-    print(df_final.dtypes, "\n")
+    print(df.dtypes, "\n")
+
     print("--- INFO DEL DATAFRAME FINAL ---")
-    df_final.info()
+    df.info()
+
     print("\n--- MUESTRA DE FILAS ---")
-    print(df_final.head())
+    print(df.head())
