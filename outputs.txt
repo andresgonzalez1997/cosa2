@@ -1,353 +1,97 @@
-competitor_data/purina_file_horizontal.py
-
-from __future__ import annotations
-"""
-purina_file_horizontal.py – captura y limpia PDFs Statesville (layout horizontal)
-================================================================================
-• Conservar la **primera fila real** de cada página.
-• Eliminar cabeceras repetidas (“PRODUCT NUMBER …”), fragmentos (“MIN / DAYS”)
-  y textos sueltos como “Price / Unit” o “Price in US Dollars”.
-• Normalizar números negativos (100‑ → ‑100) y añadir metadatos.
-
-Modificado 2025‑04‑17
----------------------
-✓ `NUMERIC_COLS` explícito.  
-✓ `_fix_numeric()` convierte todo a `float64`, de modo que Parquet siempre
-  escriba DOUBLE y nunca INT64.
-"""
-import datetime as _dt
-import pathlib
-import re
-from typing import List, Optional
-
-import pandas as pd
-import tabula
-
-# --------------------------------------------------------------------------- #
-# 1. Columnas estándar
-# --------------------------------------------------------------------------- #
-COLUMN_NAMES: List[str] = [
-    "product_number", "formula_code", "product_name", "product_form",
-    "unit_weight", "pallet_quantity", "stocking_status", "min_order_quantity",
-    "days_lead_time", "fob_or_dlv", "price_change", "list_price",
-    "full_pallet_price", "half_load_full_pallet_price",
-    "full_load_full_pallet_price", "full_load_best_price",
-]
-
-# Todas las columnas que deben llegar como DOUBLE al Parquet
-NUMERIC_COLS: List[str] = [
-    "pallet_quantity", "min_order_quantity", "days_lead_time",
-    "price_change", "list_price", "full_pallet_price",
-    "half_load_full_pallet_price", "full_load_full_pallet_price",
-    "full_load_best_price",
-]
-
-# --------------------------------------------------------------------------- #
-# 2. Conversión numérica
-# --------------------------------------------------------------------------- #
-_NEG_RX        = re.compile(r"\(([^)]+)\)$")        # (100)  → -100
-_NEG_TRAIL_RX  = re.compile(r"^-?[\d,.]+-$")        # 100‑   → -100
-_COMMA_RX      = re.compile(r"[, ]")
-
-def _to_float(val):
-    """Convierte valores con paréntesis o guion final a float."""
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return None
-    s = str(val).strip()
-
-    sign = -1 if _NEG_RX.search(s) or _NEG_TRAIL_RX.match(s) else 1
-    s = _COMMA_RX.sub("", s.strip("()‑"))
-
-    try:
-        return float(s) * sign
-    except ValueError:
-        return None
-
-
-def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
-    """Aplica `_to_float` y fuerza cada columna a float64 (DOUBLE en Parquet)."""
-    for col in NUMERIC_COLS:
-        if col in df.columns:
-            df[col] = df[col].apply(_to_float).astype("float64")
-    return df
-
-# --------------------------------------------------------------------------- #
-# 3. Metadatos: extractores de fecha y planta
-# --------------------------------------------------------------------------- #
-DATE_RX  = re.compile(r"(\d{1,2}/\d{1,2}/\d{2,4})")
-PLANT_RX = re.compile(r"\bPLANT:\s*([A‑Za‑z ]+)", re.I)
-
-def _first_table(pdf, area):
-    """Devuelve la tabla (como string) extraída del área dada de la primera página."""
-    try:
-        tbls = tabula.read_pdf(
-            pdf, pages=1, lattice=True, guess=False, area=area,
-            pandas_options={"dtype": str, "header": None})
-        return str(tbls[0]) if tbls else None
-    except Exception:
-        return None
-
-
-def effective_date(pdf) -> Optional[str]:
-    text = _first_table(pdf, [50, 0, 200, 400])
-    if not text:
-        return None
-    m = DATE_RX.search(text)
-    if not m:
-        return None
-    for fmt in ("%m/%d/%Y", "%m/%d/%y"):
-        try:
-            return _dt.datetime.strptime(m.group(1), fmt).date().isoformat()
-        except ValueError:
-            continue
-    return None
-
-
-def plant_location(pdf) -> Optional[str]:
-    text = _first_table(pdf, [0, 400, 100, 800])
-    if not text:
-        return None
-    m = PLANT_RX.search(text)
-    return m.group(1).strip().title() if m else None
-
-# --------------------------------------------------------------------------- #
-# 4. Filtros de filas basura
-# --------------------------------------------------------------------------- #
-HEADER_TOKENS = (
-    "PRODUCT NUMBER", "PRODUCT DESC", "PRICE CHANGE", "PRICE IN US DOLLARS",
-    "MONTHLY", "PAGE",
-)
-_PRICE_RE = re.compile("|".join(re.escape(t) for t in HEADER_TOKENS), re.I)
-
-def _is_header_row(row: pd.Series) -> bool:
-    """
-    Detecta cabeceras, fragmentos o basura.
-    Se revisa la primera celda y el contenido combinado de toda la fila.
-    """
-    first = str(row.iloc[0]).strip().upper()
-    combined = " ".join(str(x) for x in row.tolist()).upper()
-
-    # Cabeceras clásicas
-    if first.startswith("PRODUCT NUMBER") or first.startswith("PRICE CHANGE"):
-        return True
-
-    # Fragmentos (MIN / DAYS etc.) – sólo si no tienen precios
-    if pd.isna(row["list_price"]):
-        if _PRICE_RE.search(combined):
-            return True
-
-    return False
-
-# --------------------------------------------------------------------------- #
-# 5. Lectura, estandarización y limpieza
-# --------------------------------------------------------------------------- #
-def _read_tables(pdf):
-    """Lee todas las tablas usando lattice sin asumir cabecera."""
-    return tabula.read_pdf(
-        pdf, pages="all", lattice=True, guess=False,
-        pandas_options={"dtype": str, "header": None}
-    )
-
-_COLUMN_MAP = {
-    "PRODUCT NUMBER": "product_number",
-    "FORMULA CODE":   "formula_code",
-    "PRODUCT DESC.":  "product_name",
-    "PRODUCT FORM":   "product_form",
-    "UNIT  WEIGHT":   "unit_weight",
-    "PALLET  QUANTITY": "pallet_quantity",
-    "STOCKING  STATUS": "stocking_status",
-    "MIN ORDER  QUANTITY": "min_order_quantity",
-    "DAYS  LEAD  TIME": "days_lead_time",
-    "FOB / DLV": "fob_or_dlv",
-    "PRICE  CHANGE": "price_change",
-    "LIST  PRICE": "list_price",
-    "FULL  PALLET  PRICE": "full_pallet_price",
-    "HALF  LOAD  FULL  PALLET  PRICE": "half_load_full_pallet_price",
-    "FULL  LOAD  FULL  PALLET  PRICE": "full_load_full_pallet_price",
-    "FULL  LOAD  BEST  PRICE": "full_load_best_price",
-}
-
-def _standardize_table(df: pd.DataFrame) -> pd.DataFrame:
-    """Renombra columnas y recorta a las que nos interesan."""
-    if df.empty:
-        return df
-    # La primera fila suele ser la cabecera verdadera
-    df.columns = [c.strip() or f"col_{i}" for i, c in enumerate(df.iloc[0])]
-    df = df.iloc[1:].reset_index(drop=True)
-    df.rename(columns=_COLUMN_MAP, inplace=True)
-    keep = [c for c in COLUMN_NAMES if c in df.columns]
-    return df[keep]
-
-def read_file(pdf_path: str | pathlib.Path) -> pd.DataFrame:
-    """Punto de entrada principal."""
-    pdf = str(pdf_path)
-    tables = _read_tables(pdf)
-    std_tables = filter(None, (_standardize_table(t) for t in tables))
-    data = pd.concat(std_tables, ignore_index=True) if tables else pd.DataFrame()
-
-    # eliminar cabeceras / fragmentos pero conservar la primera fila de datos
-    data = data[~data.apply(_is_header_row, axis=1)].reset_index(drop=True)
-    data.dropna(how="all", inplace=True)
-
-    # metadatos
-    data["plant_location"] = plant_location(pdf)
-    data["date_inserted"]  = effective_date(pdf)
-    data["source"]         = "pdf"
-
-    return _fix_numeric(data)[[*COLUMN_NAMES, "plant_location",
-                               "date_inserted", "source"]]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-cdp_interface/upload_data.py
-
-
-import pathlib
-import pyarrow.parquet as pq
-import pyarrow as pa
-import os
-import pandas as pd                  # ← NEW
-
-class DataUpload:
-    PARQUET_FOLDER_PATH = "cdp_interface/exported_parquet_files"
-
-    def __init__(self, file_system, database):
-        self.fs = file_system
-        self.db = database
-
-    # ------------------------------------------------------------------ #
-    # Public entry point (unchanged)
-    # ------------------------------------------------------------------ #
-    def upload_data(self, data, table_name, file_name):
-        print(f"uploading data to {table_name}")
-        file_path = self.export_data_to_parquet_file(data, table_name, file_name)
-        if file_path is None:
-            return False
-
-        if not self.upload_parquet_file_to_hdfs(file_path, table_name, file_name):
-            return False
-        print("upload_parquet_file_to_hdfs done.")
-
-        if not self.create_temp_table_from_parquet_file(table_name, file_name):
-            return False
-        print("temp table created from parquet file.")
-
-        if not self.insert_into_main_table(table_name, file_name):
-            return False
-        print("data inserted into main table.")
-
-        if not self.main_table_refresh_metadata(table_name):
-            return False
-        print("main table refreshed.")
-
-        if not self.drop_temp_table(table_name, file_name):
-            return False
-        print("temp table dropped.")
-
-        self.delete_temp_parquet_file(file_path)
-        return True
-
-    # ------------------------------------------------------------------ #
-    # 1. Export DataFrame → parquet  (patched)
-    # ------------------------------------------------------------------ #
-    def export_data_to_parquet_file(self, data, table_name, file_name):
-        print("export_data_to_parquet_file")
-        try:
-            pathlib.Path(self.PARQUET_FOLDER_PATH).mkdir(exist_ok=True)
-
-            # --- safety net: cast every int64 to float64 ----------------
-            int_cols = data.select_dtypes(include="int").columns
-            if len(int_cols):
-                data = data.astype({c: "float64" for c in int_cols})
-
-            new_file_path = (
-                pathlib.Path(self.PARQUET_FOLDER_PATH)
-                / f"{table_name}_{file_name}.parquet"
-            )
-            parquet_table = pa.Table.from_pandas(data, preserve_index=False)
-            pq.write_table(parquet_table, where=new_file_path, version="1.0")
-            return new_file_path
-
-        except Exception as ex:
-            print(f"[ERROR] --- export_data_to_parquet_file: {ex}")
-            return None
-
-    # ------------------------------------------------------------------ #
-    # 2. Everything below is exactly your original logic (unchanged)
-    # ------------------------------------------------------------------ #
-    def upload_parquet_file_to_hdfs(self, file_path, table_name, file_name):
-        print("upload_parquet_file_to_hdfs")
-        try:
-            hdfs_dir = f"/prd/internal/anh_customer_profitability/{table_name}_{file_name}"
-            self.fs.mkdir(hdfs_dir)
-            self.fs.put(file_path, f"{hdfs_dir}/{pathlib.Path(file_path).name}")
-            return True
-        except Exception as ex:
-            print(ex)
-            return False
-
-    def create_temp_table_from_parquet_file(self, table_name, file_name):
-        print("create_temp_table_from_parquet_file")
-        try:
-            temp_table_name = f"{table_name}_{file_name}"
-            parquet_dir = f"/prd/internal/anh_customer_profitability/{temp_table_name}"
-            self.db.drop_table(temp_table_name)
-            self.db.create_external_table_from_parquet(temp_table_name, parquet_dir)
-            print(f"[DEBUG] Columns in temp table {temp_table_name} "
-                  f"after creation: {self.db.column_list(temp_table_name)}")
-            return True
-        except Exception as ex:
-            print(ex)
-            return False
-
-    def insert_into_main_table(self, table_name, file_name):
-        print("insert_into_main_table")
-        try:
-            temp_table_name = f"{table_name}_{file_name}"
-            column_def = ",".join(self.db.column_def(table_name))
-            print(f"[DEBUG] column_def for temp table: {column_def}")
-            self.db.insert_into_table_from_temp(table_name, temp_table_name, column_def)
-            return True
-        except Exception as ex:
-            print(ex)
-            return False
-
-    def main_table_refresh_metadata(self, table_name):
-        print("main_table_refresh_metadata")
-        try:
-            self.db.refresh_table_metadata(table_name)
-            return True
-        except Exception as ex:
-            print(ex)
-            return False
-
-    def drop_temp_table(self, table_name, file_name):
-        print("drop_temp_table")
-        try:
-            temp_table_name = f"{table_name}_{file_name}"
-            self.db.drop_table(temp_table_name)
-            return True
-        except Exception as ex:
-            print(ex)
-            return False
-
-    def delete_temp_parquet_file(self, file_path):
-        print("deleting_temp_parquet_file")
-        try:
-            os.remove(file_path)
-            return True
-        except Exception as error:
-            print(error)
-            return False
-
+[1/1] Procesando: 2024.10.07 Statesville.pdf
+Got stderr: Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
+WARNING: Using fallback font LiberationSans for base font Times-Roman
+Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
+WARNING: Using fallback font LiberationSans for base font Times-Bold
+Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
+WARNING: Using fallback font LiberationSans for base font Times-Italic
+Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
+WARNING: Using fallback font LiberationSans for base font Times-BoldItalic
+Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
+WARNING: Using fallback font LiberationSans for base font Helvetica
+Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
+WARNING: Using fallback font LiberationSans for base font Helvetica-Bold
+Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
+WARNING: Using fallback font LiberationSans for base font Helvetica-Oblique
+Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
+WARNING: Using fallback font LiberationSans for base font Helvetica-BoldOblique
+Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
+WARNING: Using fallback font LiberationSans for base font Courier
+Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
+WARNING: Using fallback font LiberationSans for base font Courier-Bold
+Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
+WARNING: Using fallback font LiberationSans for base font Courier-Oblique
+Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
+WARNING: Using fallback font LiberationSans for base font Courier-BoldOblique
+Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
+WARNING: Using fallback font LiberationSans for base font Symbol
+Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
+WARNING: Using fallback font LiberationSans for base font ZapfDingbats
+Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
+WARNING: Using fallback font LiberationSans for Helvetica-Bold
+Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
+WARNING: Using fallback font LiberationSans for Helvetica
+
+AttributeError: 'float' object has no attribute 'strip'
+AttributeError                            Traceback (most recent call last)
+/tmp/ipykernel_115/1215835711.py in <module>
+      1 if __name__ == "__main__":
+----> 2     excecute_process()
+
+/tmp/ipykernel_115/1010927215.py in excecute_process()
+     35 
+     36         # Parsear (horizontal)
+---> 37         df = pfh.read_file(str(local_pdf_path))
+     38 
+     39         # Observa columnas
+
+~/competitor_data/purina_file_horizontal.py in read_file(pdf_path)
+    182     tables = _read_tables(pdf)
+    183     std_tables = filter(None, (_standardize_table(t) for t in tables))
+--> 184     data = pd.concat(std_tables, ignore_index=True) if tables else pd.DataFrame()
+    185 
+    186     # eliminar cabeceras / fragmentos pero conservar la primera fila de datos
+
+~/.local/lib/python3.7/site-packages/pandas/util/_decorators.py in wrapper(*args, **kwargs)
+    309                     stacklevel=stacklevel,
+    310                 )
+--> 311             return func(*args, **kwargs)
+    312 
+    313         return wrapper
+
+~/.local/lib/python3.7/site-packages/pandas/core/reshape/concat.py in concat(objs, axis, join, ignore_index, keys, levels, names, verify_integrity, sort, copy)
+    302         verify_integrity=verify_integrity,
+    303         copy=copy,
+--> 304         sort=sort,
+    305     )
+    306 
+
+~/.local/lib/python3.7/site-packages/pandas/core/reshape/concat.py in __init__(self, objs, axis, join, keys, levels, names, ignore_index, verify_integrity, copy, sort)
+    346             objs = [objs[k] for k in keys]
+    347         else:
+--> 348             objs = list(objs)
+    349 
+    350         if len(objs) == 0:
+
+~/competitor_data/purina_file_horizontal.py in <genexpr>(.0)
+    181     pdf = str(pdf_path)
+    182     tables = _read_tables(pdf)
+--> 183     std_tables = filter(None, (_standardize_table(t) for t in tables))
+    184     data = pd.concat(std_tables, ignore_index=True) if tables else pd.DataFrame()
+    185 
+
+~/competitor_data/purina_file_horizontal.py in _standardize_table(df)
+    171         return df
+    172     # La primera fila suele ser la cabecera verdadera
+--> 173     df.columns = [c.strip() or f"col_{i}" for i, c in enumerate(df.iloc[0])]
+    174     df = df.iloc[1:].reset_index(drop=True)
+    175     df.rename(columns=_COLUMN_MAP, inplace=True)
+
+~/competitor_data/purina_file_horizontal.py in <listcomp>(.0)
+    171         return df
+    172     # La primera fila suele ser la cabecera verdadera
+--> 173     df.columns = [c.strip() or f"col_{i}" for i, c in enumerate(df.iloc[0])]
+    174     df = df.iloc[1:].reset_index(drop=True)
+    175     df.rename(columns=_COLUMN_MAP, inplace=True)
+
+AttributeError: 'float' object has no attribute 'strip'
