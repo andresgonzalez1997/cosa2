@@ -101,21 +101,31 @@ HEADER_TOKENS = {
     "PRODUCT", "FORM", "UNIT", "WEIGHT", "PALLET", "MIN", "ORDER",
     "QUANTITY", "DAYS", "LEAD", "TIME", "STOCKING", "STATUS", "FOB", "DLV",
 }
-# textos que deben descartarse íntegros
 PRICE_HEADER_PATTERNS = (
     "PRICE / UNIT",
+    "PRICE IN US DOLLAR",   # sin ‘S’ (algunas hojas vienen así)
     "PRICE IN US DOLLARS",
     "MONTHLY",
-    "PAGE",  # “Page 2 of 13”
+    "PAGE",                 # “Page 2 of 13”
 )
+
+# pre‑compilado para búsqueda más rápida en toda la fila
+_PRICE_RE = re.compile("|".join(re.escape(p) for p in PRICE_HEADER_PATTERNS), re.I)
 
 
 def _is_header_row(row: pd.Series) -> bool:
-    first = str(row.iloc[0]).strip().upper()
-
-    # descartar líneas obvias
-    if any(first.startswith(p) for p in PRICE_HEADER_PATTERNS):
+    """
+    Devuelve True si la fila es cabecera, fragmento o basura.
+    Se revisa la primera celda **y** el contenido combinado de la fila para
+    cubrir casos como “Price in US Dollars” en medio de la tabla.
+    """
+    # --- 1. ¿Contiene algún patrón prohibido en cualquier columna?
+    combined = " ".join(str(x).upper() for x in row if x and not pd.isna(x))
+    if _PRICE_RE.search(combined):
         return True
+
+    # --- 2. Reglas clásicas (primera celda) ------------------------------
+    first = str(row.iloc[0]).strip().upper()
 
     # no eliminar si comienza por dígito (fila de datos)
     if first and first[0].isdigit():
@@ -127,9 +137,9 @@ def _is_header_row(row: pd.Series) -> bool:
 
     # Fragmentos (MIN / DAYS etc.) – sólo si no tienen precios
     if pd.isna(row["list_price"]):
-        combined = " ".join(str(x).upper() for x in row if x)
         if any(tok in combined for tok in HEADER_TOKENS):
             return True
+
     return False
 
 # --------------------------------------------------------------------------- #
