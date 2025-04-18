@@ -1,49 +1,206 @@
-ValueError: The truth value of a DataFrame is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
-ValueError                                Traceback (most recent call last)
-/tmp/ipykernel_117/1215835711.py in <module>
-      1 if __name__ == "__main__":
-----> 2     excecute_process()
+from __future__ import annotations
+"""
+purina_pdf_reader.py – capturar tablas Statesville sin perder la primera fila
+=============================================================================
+• Conservar la **primera línea de datos** de cada página.
+• Eliminar cabeceras repetidas (“PRODUCT NUMBER …”), fragmentos (“MIN / DAYS”)
+  y textos sueltos como “Price / Unit” o “Price in US Dollars”.
+• Corregir números negativos (100‑  →  ‑100) y añadir metadatos.
+"""
+import datetime as _dt
+import pathlib
+import re
+from typing import List, Optional
 
-/tmp/ipykernel_117/1010927215.py in excecute_process()
-     35 
-     36         # Parsear (horizontal)
----> 37         df = pfh.read_file(str(local_pdf_path))
-     38 
-     39         # Observa columnas
+import pandas as pd
+import tabula
 
-~/competitor_data/purina_file_horizontal.py in read_file(pdf_path)
-    207     tables = _read_tables(pdf_path)
-    208     std_tables = filter(None, (_standardize_table(t) for t in tables))
---> 209     data = pd.concat(std_tables, ignore_index=True) if tables else pd.DataFrame()
-    210 
-    211     if data.empty:
+# --------------------------------------------------------------------------- #
+# 1. Nombres y columnas estándar
+# --------------------------------------------------------------------------- #
+COLUMN_NAMES: List[str] = [
+    "product_number", "formula_code", "product_name", "product_form",
+    "unit_weight", "pallet_quantity", "stocking_status", "min_order_quantity",
+    "days_lead_time", "fob_or_dlv", "price_change", "list_price",
+    "full_pallet_price", "half_load_full_pallet_price",
+    "full_load_full_pallet_price", "full_load_best_price",
+    "species", "date_inserted", "plant_location", "source",
+]
 
-~/.local/lib/python3.7/site-packages/pandas/util/_decorators.py in wrapper(*args, **kwargs)
-    309                     stacklevel=stacklevel,
-    310                 )
---> 311             return func(*args, **kwargs)
-    312 
-    313         return wrapper
+# Numeric columns coerced to float so Parquet columns match DOUBLE in Impala
+NUMERIC_COLS: List[str] = [
+    "pallet_quantity", "min_order_quantity", "days_lead_time",
+] + COLUMN_NAMES[10:]
 
-~/.local/lib/python3.7/site-packages/pandas/core/reshape/concat.py in concat(objs, axis, join, ignore_index, keys, levels, names, verify_integrity, sort, copy)
-    302         verify_integrity=verify_integrity,
-    303         copy=copy,
---> 304         sort=sort,
-    305     )
-    306 
+_TABLE_AREA = [80, 16, 770, 590]  # Default lattice area; may be tweaked per‑page
 
-~/.local/lib/python3.7/site-packages/pandas/core/reshape/concat.py in __init__(self, objs, axis, join, keys, levels, names, ignore_index, verify_integrity, copy, sort)
-    346             objs = [objs[k] for k in keys]
-    347         else:
---> 348             objs = list(objs)
-    349 
-    350         if len(objs) == 0:
+DATE_RX = re.compile(r"\d{1,2}/\d{1,2}/(\d{4}|\d{2})")
+LOC_RX = re.compile(r"([A-Z][A-Z0-9\-']+\s+NC)")
 
-~/.local/lib/python3.7/site-packages/pandas/core/generic.py in __nonzero__(self)
-   1536     def __nonzero__(self):
-   1537         raise ValueError(
--> 1538             f"The truth value of a {type(self).__name__} is ambiguous. "
-   1539             "Use a.empty, a.bool(), a.item(), a.any() or a.all()."
-   1540         )
+# --------------------------------------------------------------------------- #
+# 2. Lectura y limpieza de tablas
+# --------------------------------------------------------------------------- #
 
-ValueError: The truth value of a DataFrame is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+def _read_tables(pdf: str | pathlib.Path):
+    """Extrae todas las tablas lattice del PDF."""
+    return tabula.read_pdf(
+        pdf,
+        area=_TABLE_AREA,
+        pages="all",
+        lattice=True,
+        multiple_tables=True,
+    )
+
+
+def _standardize_table(df: pd.DataFrame | None) -> Optional[pd.DataFrame]:
+    if df is None or df.empty:
+        return None
+
+    # Renombrar columnas principales (las 16 primeras filas son consistentes)
+    df.columns = COLUMN_NAMES[: len(df.columns)]
+
+    # Normalizar numéricos
+    df = _fix_numeric(df)
+
+    # Eliminar posibles filas‑cabecera repetidas
+    df = df.loc[~df.apply(_is_header_row, axis=1)].reset_index(drop=True)
+
+    return df
+
+
+_NUM_RX = re.compile(r"[\d,.()‑-]+")
+
+
+def _to_float(s: str | int | float | None):
+    """Convierte strings con comas, paréntesis o guiones a float."""
+    if pd.isna(s):
+        return None
+    if isinstance(s, (int, float)):
+        return float(s)
+
+    sign = -1 if "(" in str(s) or "‑" in str(s) else 1
+    s = _NUM_RX.search(str(s).replace(",", ""))
+    if not s:
+        return None
+    try:
+        return float(s.group().replace("(", "").replace(")", "")) * sign
+    except ValueError:
+        return None
+
+
+def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    for col in NUMERIC_COLS:
+        if col in df.columns:
+            df[col] = df[col].apply(_to_float)
+    return df
+
+# --------------------------------------------------------------------------- #
+# 3. Metadatos: fecha efectiva y planta
+# --------------------------------------------------------------------------- #
+
+def effective_date(pdf):
+    text = _first_table(pdf, [50, 0, 200, 400])
+    if not text:
+        return None
+    m = DATE_RX.search(text)
+    if not m:
+        return None
+    for fmt in ("%m/%d/%Y", "%m/%d/%y"):
+        try:
+            return _dt.datetime.strptime(m.group(0), fmt).date().isoformat()
+        except ValueError:
+            pass
+    return None
+
+
+def plant_location(pdf):
+    text = _first_table(pdf, [0, 0, 50, 250])
+    if not text:
+        return None
+    if "HUDSON'S" in text:
+        return "HUDSON'S"
+    m = LOC_RX.search(text)
+    return m.group(1) if m else None
+
+# --------------------------------------------------------------------------- #
+# 4. Detección de filas‑cabecera / fragmentos
+# --------------------------------------------------------------------------- #
+HEADER_TOKENS = {
+    "PRODUCT", "FORM", "UNIT", "WEIGHT", "PALLET", "MIN", "ORDER",
+    "QUANTITY", "DAYS", "LEAD", "TIME", "STOCKING", "STATUS", "FOB", "DLV",
+}
+PRICE_HEADER_PATTERNS = (
+    "PRICE / UNIT",
+    "PRICE IN US DOLLAR",   # sin 'S' (algunas hojas vienen así)
+    "PRICE IN US DOLLARS",
+    "MONTHLY",
+    "PAGE",                 # “Page 2 of 13”
+)
+_PRICE_RE = re.compile("|".join(re.escape(p) for p in PRICE_HEADER_PATTERNS), re.I)
+
+
+def _is_header_row(row: pd.Series) -> bool:
+    """True si la fila es cabecera o fragmento y debe descartarse."""
+
+    # --- 1. Caso fácil: contiene texto típico de cabecera PRICE / UNIT etc. ---
+    combined = " ".join(str(v).upper() for v in row if not pd.isna(v))
+    if _PRICE_RE.search(combined):
+        return True
+
+    # --- 2. Reglas clásicas (primera celda) ------------------------------
+    first = str(row.iloc[0]).strip().upper()
+    if first and first[0].isdigit():
+        return False  # fila de datos genuina
+
+    if first.startswith("PRODUCT") and str(row.iloc[1]).upper().startswith("FORMULA"):
+        return True
+
+    if pd.isna(row["list_price"]):
+        if any(tok in combined for tok in HEADER_TOKENS):
+            return True
+
+    return False
+
+# --------------------------------------------------------------------------- #
+# 5. Funciones auxiliares de lectura de texto (para fecha y planta)
+# --------------------------------------------------------------------------- #
+
+def _first_table(pdf, area):
+    try:
+        t = tabula.read_pdf(pdf, area=area, pages=1, lattice=True, multiple_tables=False)
+        if t:
+            return " ".join(str(x) for x in t[0].iloc[0].values)
+    except Exception:
+        pass
+    return ""
+
+# --------------------------------------------------------------------------- #
+# 6. API pública
+# --------------------------------------------------------------------------- #
+
+def read_file(pdf_path: str | pathlib.Path) -> pd.DataFrame:
+    """Devuelve un DataFrame limpio con todas las páginas unificadas."""
+
+    pdf_path = str(pdf_path)
+    tables = _read_tables(pdf_path)
+
+    # Normalise each table and drop empty ones
+    std_tables = [
+        tbl for tbl in (_standardize_table(t) for t in tables)
+        if tbl is not None and not tbl.empty
+    ]
+
+    data = pd.concat(std_tables, ignore_index=True) if std_tables else pd.DataFrame()
+
+    if data.empty:
+        raise ValueError("No se pudo extraer ninguna tabla válida del PDF.")
+
+    # Añade metadatos (fecha y planta)
+    data["date_inserted"] = effective_date(pdf_path)
+    data["plant_location"] = plant_location(pdf_path)
+    data["source"] = pathlib.Path(pdf_path).name
+
+    # Orden final de columnas
+    data = data.reindex(columns=COLUMN_NAMES)
+
+    return data
