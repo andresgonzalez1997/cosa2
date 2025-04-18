@@ -1,97 +1,200 @@
-[1/1] Procesando: 2024.10.07 Statesville.pdf
-Got stderr: Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
-WARNING: Using fallback font LiberationSans for base font Times-Roman
-Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
-WARNING: Using fallback font LiberationSans for base font Times-Bold
-Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
-WARNING: Using fallback font LiberationSans for base font Times-Italic
-Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
-WARNING: Using fallback font LiberationSans for base font Times-BoldItalic
-Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
-WARNING: Using fallback font LiberationSans for base font Helvetica
-Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
-WARNING: Using fallback font LiberationSans for base font Helvetica-Bold
-Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
-WARNING: Using fallback font LiberationSans for base font Helvetica-Oblique
-Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
-WARNING: Using fallback font LiberationSans for base font Helvetica-BoldOblique
-Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
-WARNING: Using fallback font LiberationSans for base font Courier
-Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
-WARNING: Using fallback font LiberationSans for base font Courier-Bold
-Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
-WARNING: Using fallback font LiberationSans for base font Courier-Oblique
-Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
-WARNING: Using fallback font LiberationSans for base font Courier-BoldOblique
-Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
-WARNING: Using fallback font LiberationSans for base font Symbol
-Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
-WARNING: Using fallback font LiberationSans for base font ZapfDingbats
-Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
-WARNING: Using fallback font LiberationSans for Helvetica-Bold
-Apr 18, 2025 5:23:13 AM org.apache.pdfbox.pdmodel.font.PDType1Font <init>
-WARNING: Using fallback font LiberationSans for Helvetica
+from __future__ import annotations
+"""
+purina_file_horizontal.py – captura y limpia PDFs Statesville (layout horizontal)
+================================================================================
+• Conservar la **primera fila real** de cada página.
+• Eliminar cabeceras repetidas (“PRODUCT NUMBER …”), fragmentos (“MIN / DAYS”)
+  y textos sueltos como “Price / Unit” o “Price in US Dollars”.
+• Normalizar números negativos (100‑ → ‑100) y añadir metadatos.
 
-AttributeError: 'float' object has no attribute 'strip'
-AttributeError                            Traceback (most recent call last)
-/tmp/ipykernel_115/1215835711.py in <module>
-      1 if __name__ == "__main__":
-----> 2     excecute_process()
+Última modificación 2025‑04‑18
+------------------------------
+✓ `NUMERIC_COLS` explícito (todas las cifras llegan como float64 → DOUBLE).  
+✓ `_fix_numeric()` fuerza cada numérico a float64.  
+✓ `_standardize_table()` convierte las celdas del encabezado a `str`
+  antes de usar `strip()` (evita AttributeError cuando Tabula trae un float).
+"""
+import datetime as _dt
+import pathlib
+import re
+from typing import List, Optional
 
-/tmp/ipykernel_115/1010927215.py in excecute_process()
-     35 
-     36         # Parsear (horizontal)
----> 37         df = pfh.read_file(str(local_pdf_path))
-     38 
-     39         # Observa columnas
+import pandas as pd
+import tabula
 
-~/competitor_data/purina_file_horizontal.py in read_file(pdf_path)
-    182     tables = _read_tables(pdf)
-    183     std_tables = filter(None, (_standardize_table(t) for t in tables))
---> 184     data = pd.concat(std_tables, ignore_index=True) if tables else pd.DataFrame()
-    185 
-    186     # eliminar cabeceras / fragmentos pero conservar la primera fila de datos
+# --------------------------------------------------------------------------- #
+# 1. Columnas estándar
+# --------------------------------------------------------------------------- #
+COLUMN_NAMES: List[str] = [
+    "product_number", "formula_code", "product_name", "product_form",
+    "unit_weight", "pallet_quantity", "stocking_status", "min_order_quantity",
+    "days_lead_time", "fob_or_dlv", "price_change", "list_price",
+    "full_pallet_price", "half_load_full_pallet_price",
+    "full_load_full_pallet_price", "full_load_best_price",
+]
 
-~/.local/lib/python3.7/site-packages/pandas/util/_decorators.py in wrapper(*args, **kwargs)
-    309                     stacklevel=stacklevel,
-    310                 )
---> 311             return func(*args, **kwargs)
-    312 
-    313         return wrapper
+# Todas las columnas que deben llegar como DOUBLE al Parquet
+NUMERIC_COLS: List[str] = [
+    "pallet_quantity", "min_order_quantity", "days_lead_time",
+    "price_change", "list_price", "full_pallet_price",
+    "half_load_full_pallet_price", "full_load_full_pallet_price",
+    "full_load_best_price",
+]
 
-~/.local/lib/python3.7/site-packages/pandas/core/reshape/concat.py in concat(objs, axis, join, ignore_index, keys, levels, names, verify_integrity, sort, copy)
-    302         verify_integrity=verify_integrity,
-    303         copy=copy,
---> 304         sort=sort,
-    305     )
-    306 
+# --------------------------------------------------------------------------- #
+# 2. Conversión numérica
+# --------------------------------------------------------------------------- #
+_NEG_RX        = re.compile(r"\(([^)]+)\)$")        # (100)  → -100
+_NEG_TRAIL_RX  = re.compile(r"^-?[\d,.]+-$")        # 100‑   → -100
+_COMMA_RX      = re.compile(r"[, ]")
 
-~/.local/lib/python3.7/site-packages/pandas/core/reshape/concat.py in __init__(self, objs, axis, join, keys, levels, names, ignore_index, verify_integrity, copy, sort)
-    346             objs = [objs[k] for k in keys]
-    347         else:
---> 348             objs = list(objs)
-    349 
-    350         if len(objs) == 0:
+def _to_float(val):
+    """Convierte strings como '(1,234.50)' o '100‑' a float o None."""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return None
+    s = str(val).strip()
 
-~/competitor_data/purina_file_horizontal.py in <genexpr>(.0)
-    181     pdf = str(pdf_path)
-    182     tables = _read_tables(pdf)
---> 183     std_tables = filter(None, (_standardize_table(t) for t in tables))
-    184     data = pd.concat(std_tables, ignore_index=True) if tables else pd.DataFrame()
-    185 
+    sign = -1 if _NEG_RX.search(s) or _NEG_TRAIL_RX.match(s) else 1
+    s = _COMMA_RX.sub("", s.strip("()‑"))
 
-~/competitor_data/purina_file_horizontal.py in _standardize_table(df)
-    171         return df
-    172     # La primera fila suele ser la cabecera verdadera
---> 173     df.columns = [c.strip() or f"col_{i}" for i, c in enumerate(df.iloc[0])]
-    174     df = df.iloc[1:].reset_index(drop=True)
-    175     df.rename(columns=_COLUMN_MAP, inplace=True)
+    try:
+        return float(s) * sign
+    except ValueError:
+        return None
 
-~/competitor_data/purina_file_horizontal.py in <listcomp>(.0)
-    171         return df
-    172     # La primera fila suele ser la cabecera verdadera
---> 173     df.columns = [c.strip() or f"col_{i}" for i, c in enumerate(df.iloc[0])]
-    174     df = df.iloc[1:].reset_index(drop=True)
-    175     df.rename(columns=_COLUMN_MAP, inplace=True)
 
-AttributeError: 'float' object has no attribute 'strip'
+def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    """Aplica `_to_float` y fuerza cada columna numérica a float64 (DOUBLE)."""
+    for col in NUMERIC_COLS:
+        if col in df.columns:
+            df[col] = df[col].apply(_to_float).astype("float64")
+    return df
+
+# --------------------------------------------------------------------------- #
+# 3. Metadatos: extractores de fecha y planta
+# --------------------------------------------------------------------------- #
+DATE_RX  = re.compile(r"(\d{1,2}/\d{1,2}/\d{2,4})")
+PLANT_RX = re.compile(r"\bPLANT:\s*([A‑Za‑z ]+)", re.I)
+
+def _first_table(pdf, area):
+    """Devuelve la tabla (como string) extraída del área dada de la primera página."""
+    try:
+        tbls = tabula.read_pdf(
+            pdf, pages=1, lattice=True, guess=False, area=area,
+            pandas_options={"dtype": str, "header": None})
+        return str(tbls[0]) if tbls else None
+    except Exception:
+        return None
+
+
+def effective_date(pdf) -> Optional[str]:
+    text = _first_table(pdf, [50, 0, 200, 400])
+    if not text:
+        return None
+    m = DATE_RX.search(text)
+    if not m:
+        return None
+    for fmt in ("%m/%d/%Y", "%m/%d/%y"):
+        try:
+            return _dt.datetime.strptime(m.group(1), fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def plant_location(pdf) -> Optional[str]:
+    text = _first_table(pdf, [0, 400, 100, 800])
+    if not text:
+        return None
+    m = PLANT_RX.search(text)
+    return m.group(1).strip().title() if m else None
+
+# --------------------------------------------------------------------------- #
+# 4. Filtros de filas basura
+# --------------------------------------------------------------------------- #
+HEADER_TOKENS = (
+    "PRODUCT NUMBER", "PRODUCT DESC", "PRICE CHANGE", "PRICE IN US DOLLARS",
+    "MONTHLY", "PAGE",
+)
+_PRICE_RE = re.compile("|".join(re.escape(t) for t in HEADER_TOKENS), re.I)
+
+def _is_header_row(row: pd.Series) -> bool:
+    """
+    Detecta cabeceras, fragmentos o basura.
+    Se revisa la primera celda y el contenido combinado de toda la fila.
+    """
+    first = str(row.iloc[0]).strip().upper()
+    combined = " ".join(str(x) for x in row.tolist()).upper()
+
+    # Cabeceras clásicas
+    if first.startswith("PRODUCT NUMBER") or first.startswith("PRICE CHANGE"):
+        return True
+
+    # Fragmentos (MIN / DAYS etc.) – sólo si no tienen precios
+    if pd.isna(row["list_price"]):
+        if _PRICE_RE.search(combined):
+            return True
+
+    return False
+
+# --------------------------------------------------------------------------- #
+# 5. Lectura, estandarización y limpieza
+# --------------------------------------------------------------------------- #
+def _read_tables(pdf):
+    """Lee todas las tablas usando lattice sin asumir cabecera."""
+    return tabula.read_pdf(
+        pdf, pages="all", lattice=True, guess=False,
+        pandas_options={"dtype": str, "header": None}
+    )
+
+_COLUMN_MAP = {
+    "PRODUCT NUMBER": "product_number",
+    "FORMULA CODE":   "formula_code",
+    "PRODUCT DESC.":  "product_name",
+    "PRODUCT FORM":   "product_form",
+    "UNIT  WEIGHT":   "unit_weight",
+    "PALLET  QUANTITY": "pallet_quantity",
+    "STOCKING  STATUS": "stocking_status",
+    "MIN ORDER  QUANTITY": "min_order_quantity",
+    "DAYS  LEAD  TIME": "days_lead_time",
+    "FOB / DLV": "fob_or_dlv",
+    "PRICE  CHANGE": "price_change",
+    "LIST  PRICE": "list_price",
+    "FULL  PALLET  PRICE": "full_pallet_price",
+    "HALF  LOAD  FULL  PALLET  PRICE": "half_load_full_pallet_price",
+    "FULL  LOAD  FULL  PALLET  PRICE": "full_load_full_pallet_price",
+    "FULL  LOAD  BEST  PRICE": "full_load_best_price",
+}
+
+def _standardize_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Renombra columnas y recorta a las que nos interesan."""
+    if df.empty:
+        return df
+
+    # La primera fila suele ser la cabecera verdadera → conviértela a str
+    header = [str(c) if not pd.isna(c) else "" for c in df.iloc[0]]
+    df.columns = [h.strip() or f"col_{i}" for i, h in enumerate(header)]
+
+    df = df.iloc[1:].reset_index(drop=True)
+    df.rename(columns=_COLUMN_MAP, inplace=True)
+    keep = [c for c in COLUMN_NAMES if c in df.columns]
+    return df[keep]
+
+def read_file(pdf_path: str | pathlib.Path) -> pd.DataFrame:
+    """Punto de entrada principal."""
+    pdf = str(pdf_path)
+    tables = _read_tables(pdf)
+    std_tables = filter(None, (_standardize_table(t) for t in tables))
+    data = pd.concat(std_tables, ignore_index=True) if tables else pd.DataFrame()
+
+    # eliminar cabeceras / fragmentos pero conservar la primera fila de datos
+    data = data[~data.apply(_is_header_row, axis=1)].reset_index(drop=True)
+    data.dropna(how="all", inplace=True)
+
+    # metadatos
+    data["plant_location"] = plant_location(pdf)
+    data["date_inserted"]  = effective_date(pdf)
+    data["source"]         = "pdf"
+
+    return _fix_numeric(data)[[*COLUMN_NAMES, "plant_location",
+                               "date_inserted", "source"]]
