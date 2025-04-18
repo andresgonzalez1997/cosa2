@@ -1,187 +1,42 @@
-from __future__ import annotations
-"""
-purina_pdf_reader.py – capturar tablas Statesville sin perder la primera fila
-=============================================================================
-• Conservar la **primera línea de datos** de cada página.
-• Eliminar cabeceras repetidas (“PRODUCT NUMBER …”), fragmentos (“MIN / DAYS”)
-  y textos sueltos como “Price / Unit” o “Price in US Dollars”.
-• Corregir números negativos (100‑  →  ‑100) y añadir metadatos.
-"""
-import datetime as _dt
-import pathlib
-import re
-from typing import List, Optional
+TypeError: '<' not supported between instances of 'int' and 'str'
+TypeError                                 Traceback (most recent call last)
+/tmp/ipykernel_113/1215835711.py in <module>
+      1 if __name__ == "__main__":
+----> 2     excecute_process()
 
-import pandas as pd
-import tabula
+/tmp/ipykernel_113/1010927215.py in excecute_process()
+     35 
+     36         # Parsear (horizontal)
+---> 37         df = pfh.read_file(str(local_pdf_path))
+     38 
+     39         # Observa columnas
 
-# --------------------------------------------------------------------------- #
-# 1. Nombres y columnas estándar
-# --------------------------------------------------------------------------- #
-COLUMN_NAMES: List[str] = [
-    "product_number", "formula_code", "product_name", "product_form",
-    "unit_weight", "pallet_quantity", "stocking_status", "min_order_quantity",
-    "days_lead_time", "fob_or_dlv", "price_change", "list_price",
-    "full_pallet_price", "half_load_full_pallet_price",
-    "full_load_full_pallet_price", "full_load_best_price",
-]
-NUMERIC_COLS = COLUMN_NAMES[10:]
+~/competitor_data/purina_file_horizontal.py in read_file(pdf_path)
+    167     # Final sanity sort (by product_number if present)
+    168     if "product_number" in data.columns:
+--> 169         data = data.sort_values("product_number", ignore_index=True)
+    170 
+    171     print("→ Final shape after cleaning:", data.shape)
 
-# --------------------------------------------------------------------------- #
-# 2. Conversión numérica (corrige ‘100‑’ → -100)
-# --------------------------------------------------------------------------- #
-def _to_float(val):
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return None
-    s = str(val).strip()
-    if not s:
-        return None
-    sign = -1 if s.endswith("-") else 1
-    if sign == -1:
-        s = s[:-1]
-    try:
-        return float(s) * sign
-    except ValueError:
-        return None
+~/.local/lib/python3.7/site-packages/pandas/util/_decorators.py in wrapper(*args, **kwargs)
+    309                     stacklevel=stacklevel,
+    310                 )
+--> 311             return func(*args, **kwargs)
+    312 
+    313         return wrapper
 
+~/.local/lib/python3.7/site-packages/pandas/core/frame.py in sort_values(self, by, axis, ascending, inplace, kind, na_position, ignore_index, key)
+   6269 
+   6270             indexer = nargsort(
+-> 6271                 k, kind=kind, ascending=ascending, na_position=na_position, key=key
+   6272             )
+   6273         else:
 
-def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
-    for col in NUMERIC_COLS:
-        if col in df.columns:
-            df[col] = df[col].apply(_to_float)
-    return df
+~/.local/lib/python3.7/site-packages/pandas/core/sorting.py in nargsort(items, kind, ascending, na_position, key, mask)
+    401         non_nans = non_nans[::-1]
+    402         non_nan_idx = non_nan_idx[::-1]
+--> 403     indexer = non_nan_idx[non_nans.argsort(kind=kind)]
+    404     if not ascending:
+    405         indexer = indexer[::-1]
 
-# --------------------------------------------------------------------------- #
-# 3. Metadatos: fecha efectiva y planta
-# --------------------------------------------------------------------------- #
-DATE_RX = re.compile(r"\d{1,2}/\d{1,2}/(\d{4}|\d{2})")
-LOC_RX = re.compile(r"([A-Z]+\s*'?[A-Z]*S?)")
-
-
-def _first_table(pdf, area) -> Optional[str]:
-    """Extrae un pequeño bloque de texto para buscar fecha o ubicación."""
-    try:
-        tbls = tabula.read_pdf(
-            pdf, pages=1, area=area, lattice=True, guess=False,
-            pandas_options={"dtype": str, "header": None})
-        return str(tbls[0]) if tbls else None
-    except Exception:
-        return None
-
-
-def effective_date(pdf):
-    text = _first_table(pdf, [50, 0, 200, 400])
-    if not text:
-        return None
-    m = DATE_RX.search(text)
-    if not m:
-        return None
-    for fmt in ("%m/%d/%Y", "%m/%d/%y"):
-        try:
-            return _dt.datetime.strptime(m.group(0), fmt).date().isoformat()
-        except ValueError:
-            pass
-    return None
-
-
-def plant_location(pdf):
-    text = _first_table(pdf, [0, 0, 50, 250])
-    if not text:
-        return None
-    text = text.upper()
-    if "HUDSON'S" in text:
-        return "HUDSON'S"
-    m = LOC_RX.search(text)
-    return m.group(1) if m else None
-
-# --------------------------------------------------------------------------- #
-# 4. Detección de filas‑cabecera / fragmentos
-# --------------------------------------------------------------------------- #
-HEADER_TOKENS = {
-    "PRODUCT", "FORM", "UNIT", "WEIGHT", "PALLET", "MIN", "ORDER",
-    "QUANTITY", "DAYS", "LEAD", "TIME", "STOCKING", "STATUS", "FOB", "DLV",
-}
-# textos que deben descartarse íntegros
-PRICE_HEADER_PATTERNS = (
-    "PRICE / UNIT",
-    "PRICE IN US DOLLARS",
-    "MONTHLY",
-    "PAGE",  # “Page 2 of 13”
-)
-
-
-def _is_header_row(row: pd.Series) -> bool:
-    first = str(row.iloc[0]).strip().upper()
-
-    # descartar líneas obvias
-    if any(first.startswith(p) for p in PRICE_HEADER_PATTERNS):
-        return True
-
-    # no eliminar si comienza por dígito (fila de datos)
-    if first and first[0].isdigit():
-        return False
-
-    # Cabecera principal
-    if first.startswith("PRODUCT") and str(row.iloc[1]).upper().startswith("FORMULA"):
-        return True
-
-    # Fragmentos (MIN / DAYS etc.) – sólo si no tienen precios
-    if pd.isna(row["list_price"]):
-        combined = " ".join(str(x).upper() for x in row if x)
-        if any(tok in combined for tok in HEADER_TOKENS):
-            return True
-    return False
-
-# --------------------------------------------------------------------------- #
-# 5. Lectura y estandarización de tablas
-# --------------------------------------------------------------------------- #
-def _read_tables(pdf):
-    """Lee todas las tablas con lattice, sin asumir cabecera."""
-    try:
-        return tabula.read_pdf(
-            pdf,
-            pages="all",
-            lattice=True,
-            guess=False,
-            pandas_options={"dtype": str, "header": None},  # <- clave
-        )
-    except Exception as exc:
-        print("[tabula]", exc)
-        return []
-
-
-def _standardize(tbl: pd.DataFrame):
-    """Recorta a 16 columnas y aplica nombres estándar."""
-    if tbl.shape[1] < 16:
-        return None
-    out = tbl.iloc[:, :16].copy()
-    out.columns = COLUMN_NAMES
-    return out
-
-# --------------------------------------------------------------------------- #
-# 6. Función principal
-# --------------------------------------------------------------------------- #
-def read_file(pdf: str | pathlib.Path) -> pd.DataFrame:
-    tables = _read_tables(str(pdf))
-    std_tables = [t for t in (_standardize(x) for x in tables) if t is not None]
-    if not std_tables:
-        return pd.DataFrame()
-
-    df = pd.concat(std_tables, ignore_index=True)
-
-    # eliminar cabeceras / fragmentos pero conservar la primera fila de datos
-    df = df[~df.apply(_is_header_row, axis=1)].reset_index(drop=True)
-    df.dropna(how="all", inplace=True)
-
-    # metadatos
-    df["plant_location"] = plant_location(pdf)
-    df["date_inserted"] = effective_date(pdf)
-    df["source"] = "pdf"
-
-    return _fix_numeric(df)[[*COLUMN_NAMES, "plant_location", "date_inserted", "source"]]
-
-# --------------------------------------------------------------------------- #
-# Uso:
-# >>> df = read_file("2024.10.07 Statesville.pdf")
-# >>> df.to_excel("statesville.xlsx", index=False)
-# --------------------------------------------------------------------------- #
+TypeError: '<' not supported between instances of 'int' and 'str'
