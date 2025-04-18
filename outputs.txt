@@ -1,95 +1,171 @@
-KeyError: 'list_price'
-KeyError                                  Traceback (most recent call last)
-~/.local/lib/python3.7/site-packages/pandas/core/indexes/base.py in get_loc(self, key, method, tolerance)
-   3360             try:
--> 3361                 return self._engine.get_loc(casted_key)
-   3362             except KeyError as err:
+from __future__ import annotations
+"""
+purina_file_horizontal.py – captura y limpieza de PDFs Statesville
+=================================================================
+* Recorta cabeceras y fragmentos
+* Normaliza números
+* Añade metadatos (planta, fecha)
+Última modificación: 2025‑04‑18
+"""
+import datetime as _dt
+import pathlib
+import re
+from typing import List, Optional
 
-~/.local/lib/python3.7/site-packages/pandas/_libs/index.pyx in pandas._libs.index.IndexEngine.get_loc()
+import pandas as pd
+import tabula
 
-~/.local/lib/python3.7/site-packages/pandas/_libs/index.pyx in pandas._libs.index.IndexEngine.get_loc()
+# --------------------------------------------------------------------------- #
+# 1. Columnas estándar
+# --------------------------------------------------------------------------- #
+COLUMN_NAMES: List[str] = [
+    "product_number", "formula_code", "product_name", "product_form",
+    "unit_weight", "pallet_quantity", "stocking_status", "min_order_quantity",
+    "days_lead_time", "fob_or_dlv", "price_change", "list_price",
+    "full_pallet_price", "half_load_full_pallet_price",
+    "full_load_full_pallet_price", "full_load_best_price",
+]
 
-pandas/_libs/hashtable_class_helper.pxi in pandas._libs.hashtable.PyObjectHashTable.get_item()
+NUMERIC_COLS: List[str] = [
+    "pallet_quantity", "min_order_quantity", "days_lead_time",
+    "price_change", "list_price", "full_pallet_price",
+    "half_load_full_pallet_price", "full_load_full_pallet_price",
+    "full_load_best_price",
+]
 
-pandas/_libs/hashtable_class_helper.pxi in pandas._libs.hashtable.PyObjectHashTable.get_item()
+# --------------------------------------------------------------------------- #
+# 2. Conversión numérica
+# --------------------------------------------------------------------------- #
+_NEG_RX, _NEG_TRAIL_RX = re.compile(r"\(([^)]+)\)$"), re.compile(r"^-?[\d,.]+-$")
+_COMMA_RX = re.compile(r"[, ]")
 
-KeyError: 'list_price'
+def _to_float(val):
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return None
+    s = str(val).strip()
+    sign = -1 if _NEG_RX.search(s) or _NEG_TRAIL_RX.match(s) else 1
+    s = _COMMA_RX.sub("", s.strip("()‑"))
+    try:
+        return float(s) * sign
+    except ValueError:
+        return None
 
-The above exception was the direct cause of the following exception:
+def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    for col in NUMERIC_COLS:
+        if col in df.columns:
+            df[col] = df[col].apply(_to_float).astype("float64")
+    return df
 
-KeyError                                  Traceback (most recent call last)
-/tmp/ipykernel_116/1215835711.py in <module>
-      1 if __name__ == "__main__":
-----> 2     excecute_process()
+# --------------------------------------------------------------------------- #
+# 3. Metadatos
+# --------------------------------------------------------------------------- #
+DATE_RX  = re.compile(r"(\d{1,2}/\d{1,2}/\d{2,4})")
+PLANT_RX = re.compile(r"\bPLANT:\s*([A-Za-z ]+)", re.I)
 
-/tmp/ipykernel_116/1010927215.py in excecute_process()
-     35 
-     36         # Parsear (horizontal)
----> 37         df = pfh.read_file(str(local_pdf_path))
-     38 
-     39         # Observa columnas
+def _first_table(pdf, area):
+    try:
+        tbls = tabula.read_pdf(pdf, pages=1, lattice=True, guess=False,
+                               area=area, pandas_options={"dtype": str, "header": None})
+        return str(tbls[0]) if tbls else None
+    except Exception:
+        return None
 
-~/competitor_data/purina_file_horizontal.py in read_file(pdf_path)
-    141     # ---------- concat ----------
-    142     data = pd.concat(std_tables, ignore_index=True) if std_tables else pd.DataFrame()
---> 143     data = data[~data.apply(_is_header_row, axis=1)].reset_index(drop=True)
-    144     data.dropna(how="all", inplace=True)
-    145 
+def effective_date(pdf):
+    text = _first_table(pdf, [50, 0, 200, 400])
+    if not text:
+        return None
+    m = DATE_RX.search(text)
+    if not m:
+        return None
+    for fmt in ("%m/%d/%Y", "%m/%d/%y"):
+        try:
+            return _dt.datetime.strptime(m.group(1), fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
 
-~/.local/lib/python3.7/site-packages/pandas/core/frame.py in apply(self, func, axis, raw, result_type, args, **kwargs)
-   8738             kwargs=kwargs,
-   8739         )
--> 8740         return op.apply()
-   8741 
-   8742     def applymap(
+def plant_location(pdf):
+    text = _first_table(pdf, [0, 400, 100, 800])
+    if not text:
+        return None
+    m = PLANT_RX.search(text)
+    return m.group(1).strip().title() if m else None
 
-~/.local/lib/python3.7/site-packages/pandas/core/apply.py in apply(self)
-    686             return self.apply_raw()
-    687 
---> 688         return self.apply_standard()
-    689 
-    690     def agg(self):
+# --------------------------------------------------------------------------- #
+# 4. Filas basura
+# --------------------------------------------------------------------------- #
+HEADER_TOKENS = ("PRODUCT NUMBER","PRODUCT DESC","PRICE CHANGE",
+                 "PRICE IN US DOLLARS","MONTHLY","PAGE")
+_PRICE_RE = re.compile("|".join(re.escape(t) for t in HEADER_TOKENS), re.I)
 
-~/.local/lib/python3.7/site-packages/pandas/core/apply.py in apply_standard(self)
-    810 
-    811     def apply_standard(self):
---> 812         results, res_index = self.apply_series_generator()
-    813 
-    814         # wrap results
+def _is_header_row(row: pd.Series) -> bool:
+    first = str(row.iloc[0]).strip().upper()
+    combined = " ".join(str(x) for x in row.tolist()).upper()
 
-~/.local/lib/python3.7/site-packages/pandas/core/apply.py in apply_series_generator(self)
-    826             for i, v in enumerate(series_gen):
-    827                 # ignore SettingWithCopy here in case the user mutates
---> 828                 results[i] = self.f(v)
-    829                 if isinstance(results[i], ABCSeries):
-    830                     # If we have a view on v, we need to make a copy because
+    # Cabeceras típicas
+    if first.startswith("PRODUCT NUMBER") or first.startswith("PRICE CHANGE"):
+        return True
 
-~/competitor_data/purina_file_horizontal.py in _is_header_row(row)
-     99     if first.startswith("PRODUCT NUMBER") or first.startswith("PRICE CHANGE"):
-    100         return True
---> 101     if pd.isna(row["list_price"]) and _PRICE_RE.search(combined):
-    102         return True
-    103     return False
+    # Fragmentos, si la fila no tiene precios
+    if "list_price" in row.index and pd.isna(row["list_price"]):
+        if _PRICE_RE.search(combined):
+            return True
+    else:
+        # Para tablas sin 'list_price', usa sólo el patrón de palabras
+        if _PRICE_RE.search(combined):
+            return True
 
-~/.local/lib/python3.7/site-packages/pandas/core/series.py in __getitem__(self, key)
-    940 
-    941         elif key_is_scalar:
---> 942             return self._get_value(key)
-    943 
-    944         if is_hashable(key):
+    return False
 
-~/.local/lib/python3.7/site-packages/pandas/core/series.py in _get_value(self, label, takeable)
-   1049 
-   1050         # Similar to Index.get_value, but we do not fall back to positional
--> 1051         loc = self.index.get_loc(label)
-   1052         return self.index._get_values_for_loc(self, loc, label)
-   1053 
+# --------------------------------------------------------------------------- #
+# 5. Lectura, estandarización y limpieza
+# --------------------------------------------------------------------------- #
+def _read_tables(pdf):
+    return tabula.read_pdf(pdf, pages="all", lattice=True, guess=False,
+                           pandas_options={"dtype": str, "header": None})
 
-~/.local/lib/python3.7/site-packages/pandas/core/indexes/base.py in get_loc(self, key, method, tolerance)
-   3361                 return self._engine.get_loc(casted_key)
-   3362             except KeyError as err:
--> 3363                 raise KeyError(key) from err
-   3364 
-   3365         if is_scalar(key) and isna(key) and not self.hasnans:
+_COLUMN_MAP = {
+    "PRODUCT NUMBER": "product_number",
+    "FORMULA CODE":   "formula_code",
+    "PRODUCT DESC.":  "product_name",
+    "PRODUCT FORM":   "product_form",
+    "UNIT  WEIGHT":   "unit_weight",
+    "PALLET  QUANTITY": "pallet_quantity",
+    "STOCKING  STATUS": "stocking_status",
+    "MIN ORDER  QUANTITY": "min_order_quantity",
+    "DAYS  LEAD  TIME": "days_lead_time",
+    "FOB / DLV": "fob_or_dlv",
+    "PRICE  CHANGE": "price_change",
+    "LIST  PRICE": "list_price",
+    "FULL  PALLET  PRICE": "full_pallet_price",
+    "HALF  LOAD  FULL  PALLET  PRICE": "half_load_full_pallet_price",
+    "FULL  LOAD  FULL  PALLET  PRICE": "full_load_full_pallet_price",
+    "FULL  LOAD  BEST  PRICE": "full_load_best_price",
+}
 
-KeyError: 'list_price'
+def _standardize_table(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    header = [str(c) if not pd.isna(c) else "" for c in df.iloc[0]]
+    df.columns = [h.strip() or f"col_{i}" for i, h in enumerate(header)]
+    df = df.iloc[1:].reset_index(drop=True)
+    df.rename(columns=_COLUMN_MAP, inplace=True)
+    return df[[c for c in COLUMN_NAMES if c in df.columns]]
+
+def read_file(pdf_path) -> pd.DataFrame:
+    pdf = str(pdf_path)
+    tables = _read_tables(pdf)
+
+    std_tables = [t for t in (_standardize_table(tbl) for tbl in tables) if not t.empty]
+
+    data = pd.concat(std_tables, ignore_index=True) if std_tables else pd.DataFrame()
+    data = data[~data.apply(_is_header_row, axis=1)].reset_index(drop=True)
+    data.dropna(how="all", inplace=True)
+
+    data["plant_location"] = plant_location(pdf)
+    data["date_inserted"]  = effective_date(pdf)
+    data["source"]         = "pdf"
+
+    return _fix_numeric(data)[[*COLUMN_NAMES, "plant_location",
+                               "date_inserted", "source"]]
+
