@@ -1,113 +1,50 @@
 --- TIPOS DEL DATAFRAME ---
-product_number                  object
-formula_code                    object
-product_name                    object
-product_form                    object
-unit_weight                     object
-pallet_quantity                 object
-stocking_status                 object
-min_order_quantity              object
-days_lead_time                  object
-fob_or_dlv                      object
-price_change                   float64
-list_price                     float64
-full_pallet_price              float64
-half_load_full_pallet_price    float64
-full_load_full_pallet_price    float64
-full_load_best_price           float64
-plant_location                  object
-date_inserted                   object
-source                          object
-dtype: object
+ValueError: The truth value of a DataFrame is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+ValueError                                Traceback (most recent call last)
+/tmp/ipykernel_116/1215835711.py in <module>
+      1 if __name__ == "__main__":
+----> 2     excecute_process()
 
---- INFO DEL DATAFRAME FINAL ---
-<class 'pandas.core.frame.DataFrame'>
-Int64Index: 262 entries, 0 to 301
-Data columns (total 19 columns):
- #   Column                       Non-Null Count  Dtype  
----  ------                       --------------  -----  
- 0   product_number               226 non-null    object 
- 1   formula_code                 224 non-null    object 
- 2   product_name                 226 non-null    object 
- 3   product_form                 226 non-null    object 
- 4   unit_weight                  226 non-null    object 
- 5   pallet_quantity              226 non-null    object 
- 6   stocking_status              226 non-null    object 
- 7   min_order_quantity           250 non-null    object 
- 8   days_lead_time               250 non-null    object 
- 9   fob_or_dlv                   226 non-null    object 
- 10  price_change                 226 non-null    float64
- 11  list_price                   226 non-null    float64
- 12  full_pallet_price            226 non-null    float64
- 13  half_load_full_pallet_price  126 non-null    float64
- 14  full_load_full_pallet_price  126 non-null    float64
- 15  full_load_best_price         226 non-null    float64
- 16  plant_location               262 non-null    object 
- 17  date_inserted                262 non-null    object 
- 18  source                       262 non-null    object 
-dtypes: float64(6), object(13)
-memory usage: 40.9+ KB
-None
+/tmp/ipykernel_116/1170210152.py in excecute_process()
+     35 
+     36         # Parsear (horizontal)
+---> 37         df = pfh.read_file(str(local_pdf_path))
+     38         print("Aqui vienen los types:-----------------")
+     39         print("\n--- TIPOS DEL DATAFRAME ---")
 
---- MUESTRA DE FILAS ---
-   product_number formula_code             product_name product_form  \
-0             NaN          NaN                      NaN          NaN   
-4             NaN          NaN                      NaN          NaN   
-5             NaN          NaN                      NaN          NaN   
-6            5554         5D02  AQUAMAX FRY STARTER 200     EXTRUDED   
-7            1466         5D04       AQUAMAX GROWER 400     EXTRUDED   
-8            1470         5D09   AQUAMAX POND FISH 4000     EXTRUDED   
-9           45303         5D05    AQUAMAX SPORTFISH 500     EXTRUDED   
-10           1468         5D06    AQUAMAX SPORTFISH 600     EXTRUDED   
-11    3003410-706         5D6R    AQUAMAX SPORTFISH MVP     EXTRUDED   
-12           1363         52C1           GAME FISH CHOW     EXTRUDED   
+~/competitor_data/purina_file_horizontal.py in read_file(pdf)
+    185     tables = _read_tables(pdf)
+    186     std_tables = filter(None, (_standardize_table(t) for t in tables))
+--> 187     data = pd.concat(std_tables, ignore_index=True) if tables else pd.DataFrame()
+    188 
+    189     if data.empty:
 
-   unit_weight pallet_quantity stocking_status min_order_quantity  \
-0          NaN             NaN             NaN                MIN   
-4          NaN             NaN             NaN           QUANTITY   
-5          NaN             NaN             NaN                NaN   
-6     50.00 LB              40              FX                  0   
-7     50.00 LB              40              MO                  0   
-8     50.00 LB              40              FX                  0   
-9     50.00 LB              40              FX                  0   
-10    50.00 LB              40              FX                  0   
-11    50.00 LB              40              FX                  0   
-12    50.00 LB              40              FX                  0   
+~/.local/lib/python3.7/site-packages/pandas/util/_decorators.py in wrapper(*args, **kwargs)
+    309                     stacklevel=stacklevel,
+    310                 )
+--> 311             return func(*args, **kwargs)
+    312 
+    313         return wrapper
 
-   days_lead_time fob_or_dlv  price_change  list_price  full_pallet_price  \
-0            DAYS        NaN           NaN         NaN                NaN   
-4            TIME        NaN           NaN         NaN                NaN   
-5             NaN        NaN           NaN         NaN                NaN   
-6               5        DLV           0.0      101.66             101.26   
-7              17        DLV           0.0       64.71              64.31   
-8               5        DLV           0.0       40.09              39.69   
-9               5        DLV           0.0       51.09              50.69   
-10              5        DLV           0.0       51.09              50.69   
-11              5        DLV           0.0       51.66              51.26   
-12              5        DLV           0.0       34.59              34.19   
+~/.local/lib/python3.7/site-packages/pandas/core/reshape/concat.py in concat(objs, axis, join, ignore_index, keys, levels, names, verify_integrity, sort, copy)
+    302         verify_integrity=verify_integrity,
+    303         copy=copy,
+--> 304         sort=sort,
+    305     )
+    306 
 
-    half_load_full_pallet_price  full_load_full_pallet_price  \
-0                           NaN                          NaN   
-4                           NaN                          NaN   
-5                           NaN                          NaN   
-6                        101.01                       100.76   
-7                         64.06                        63.81   
-8                         39.44                        39.19   
-9                         50.44                        50.19   
-10                        50.44                        50.19   
-11                        51.01                        50.76   
-12                        33.94                        33.69   
+~/.local/lib/python3.7/site-packages/pandas/core/reshape/concat.py in __init__(self, objs, axis, join, keys, levels, names, ignore_index, verify_integrity, copy, sort)
+    346             objs = [objs[k] for k in keys]
+    347         else:
+--> 348             objs = list(objs)
+    349 
+    350         if len(objs) == 0:
 
-    full_load_best_price plant_location date_inserted source  
-0                    NaN       HUDSON'S    2024-10-07    pdf  
-4                    NaN       HUDSON'S    2024-10-07    pdf  
-5                    NaN       HUDSON'S    2024-10-07    pdf  
-6                  97.74       HUDSON'S    2024-10-07    pdf  
-7                  61.90       HUDSON'S    2024-10-07    pdf  
-8                  38.01       HUDSON'S    2024-10-07    pdf  
-9                  48.68       HUDSON'S    2024-10-07    pdf  
-10                 48.68       HUDSON'S    2024-10-07    pdf  
-11                 49.24       HUDSON'S    2024-10-07    pdf  
-12                 32.68       HUDSON'S    2024-10-07    pdf  
+~/.local/lib/python3.7/site-packages/pandas/core/generic.py in __nonzero__(self)
+   1536     def __nonzero__(self):
+   1537         raise ValueError(
+-> 1538             f"The truth value of a {type(self).__name__} is ambiguous. "
+   1539             "Use a.empty, a.bool(), a.item(), a.any() or a.all()."
+   1540         )
 
-Archivo 'output_statesville.csv' generado.
+ValueError: The truth value of a DataFrame is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
