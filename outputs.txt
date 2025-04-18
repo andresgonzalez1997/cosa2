@@ -1,13 +1,12 @@
 from __future__ import annotations
-
 """
-purina_pdf_reader.py – captura completa de filas 0
-=================================================
-Lee PDFs “horizontales” Purina (layout Statesville) y conserva la **primera
-línea de datos de cada página** (p.ej. 5555 AQUAMAX FINGERLING 300), además
-elimina cabeceras/fragments y corrige números negativos.
+purina_pdf_reader.py – capturar tablas Statesville sin perder la primera fila
+=============================================================================
+• Conservar la **primera línea de datos** de cada página.
+• Eliminar cabeceras repetidas (“PRODUCT NUMBER …”), fragmentos (“MIN / DAYS”)
+  y textos sueltos como “Price / Unit” o “Price in US Dollars”.
+• Corregir números negativos (100‑  →  ‑100) y añadir metadatos.
 """
-
 import datetime as _dt
 import pathlib
 import re
@@ -16,9 +15,9 @@ from typing import List, Optional
 import pandas as pd
 import tabula
 
-# -----------------------------------------------------------------------------
-# 1  Columnas estándar
-# -----------------------------------------------------------------------------
+# --------------------------------------------------------------------------- #
+# 1. Nombres y columnas estándar
+# --------------------------------------------------------------------------- #
 COLUMN_NAMES: List[str] = [
     "product_number", "formula_code", "product_name", "product_form",
     "unit_weight", "pallet_quantity", "stocking_status", "min_order_quantity",
@@ -28,10 +27,9 @@ COLUMN_NAMES: List[str] = [
 ]
 NUMERIC_COLS = COLUMN_NAMES[10:]
 
-# -----------------------------------------------------------------------------
-# 2  Conversión numérica (corrige 100‑ → ‑100)
-# -----------------------------------------------------------------------------
-
+# --------------------------------------------------------------------------- #
+# 2. Conversión numérica (corrige ‘100‑’ → -100)
+# --------------------------------------------------------------------------- #
 def _to_float(val):
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return None
@@ -53,16 +51,19 @@ def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = df[col].apply(_to_float)
     return df
 
-# -----------------------------------------------------------------------------
-# 3  Metadatos: fecha efectiva y planta
-# -----------------------------------------------------------------------------
+# --------------------------------------------------------------------------- #
+# 3. Metadatos: fecha efectiva y planta
+# --------------------------------------------------------------------------- #
 DATE_RX = re.compile(r"\d{1,2}/\d{1,2}/(\d{4}|\d{2})")
 LOC_RX = re.compile(r"([A-Z]+\s*'?[A-Z]*S?)")
 
 
 def _first_table(pdf, area) -> Optional[str]:
+    """Extrae un pequeño bloque de texto para buscar fecha o ubicación."""
     try:
-        tbls = tabula.read_pdf(pdf, pages=1, area=area, lattice=True, guess=False)
+        tbls = tabula.read_pdf(
+            pdf, pages=1, area=area, lattice=True, guess=False,
+            pandas_options={"dtype": str, "header": None})
         return str(tbls[0]) if tbls else None
     except Exception:
         return None
@@ -93,23 +94,35 @@ def plant_location(pdf):
     m = LOC_RX.search(text)
     return m.group(1) if m else None
 
-# -----------------------------------------------------------------------------
-# 4  Detección de filas‑cabecera / fragmentos
-# -----------------------------------------------------------------------------
+# --------------------------------------------------------------------------- #
+# 4. Detección de filas‑cabecera / fragmentos
+# --------------------------------------------------------------------------- #
 HEADER_TOKENS = {
     "PRODUCT", "FORM", "UNIT", "WEIGHT", "PALLET", "MIN", "ORDER",
     "QUANTITY", "DAYS", "LEAD", "TIME", "STOCKING", "STATUS", "FOB", "DLV",
 }
+# textos que deben descartarse íntegros
+PRICE_HEADER_PATTERNS = (
+    "PRICE / UNIT",
+    "PRICE IN US DOLLARS",
+    "MONTHLY",
+    "PAGE",  # “Page 2 of 13”
+)
 
 
 def _is_header_row(row: pd.Series) -> bool:
+    first = str(row.iloc[0]).strip().upper()
+
+    # descartar líneas obvias
+    if any(first.startswith(p) for p in PRICE_HEADER_PATTERNS):
+        return True
+
     # no eliminar si comienza por dígito (fila de datos)
-    first = str(row.iloc[0]).strip()
     if first and first[0].isdigit():
         return False
 
     # Cabecera principal
-    if first.upper().startswith("PRODUCT") and str(row.iloc[1]).upper().startswith("FORMULA"):
+    if first.startswith("PRODUCT") and str(row.iloc[1]).upper().startswith("FORMULA"):
         return True
 
     # Fragmentos (MIN / DAYS etc.) – sólo si no tienen precios
@@ -119,18 +132,18 @@ def _is_header_row(row: pd.Series) -> bool:
             return True
     return False
 
-# -----------------------------------------------------------------------------
-# 5  Lectura y estandarización de tablas
-# -----------------------------------------------------------------------------
-
+# --------------------------------------------------------------------------- #
+# 5. Lectura y estandarización de tablas
+# --------------------------------------------------------------------------- #
 def _read_tables(pdf):
+    """Lee todas las tablas con lattice, sin asumir cabecera."""
     try:
         return tabula.read_pdf(
             pdf,
             pages="all",
             lattice=True,
             guess=False,
-            pandas_options={"dtype": str},
+            pandas_options={"dtype": str, "header": None},  # <- clave
         )
     except Exception as exc:
         print("[tabula]", exc)
@@ -138,25 +151,25 @@ def _read_tables(pdf):
 
 
 def _standardize(tbl: pd.DataFrame):
+    """Recorta a 16 columnas y aplica nombres estándar."""
     if tbl.shape[1] < 16:
         return None
     out = tbl.iloc[:, :16].copy()
     out.columns = COLUMN_NAMES
     return out
 
-# -----------------------------------------------------------------------------
-# 6  Función principal
-# -----------------------------------------------------------------------------
-
-def read_file(pdf):
-    tables = _read_tables(pdf)
+# --------------------------------------------------------------------------- #
+# 6. Función principal
+# --------------------------------------------------------------------------- #
+def read_file(pdf: str | pathlib.Path) -> pd.DataFrame:
+    tables = _read_tables(str(pdf))
     std_tables = [t for t in (_standardize(x) for x in tables) if t is not None]
     if not std_tables:
         return pd.DataFrame()
 
     df = pd.concat(std_tables, ignore_index=True)
 
-    # eliminar cabeceras / fragmentos pero conservar la fila de datos 0
+    # eliminar cabeceras / fragmentos pero conservar la primera fila de datos
     df = df[~df.apply(_is_header_row, axis=1)].reset_index(drop=True)
     df.dropna(how="all", inplace=True)
 
@@ -167,15 +180,8 @@ def read_file(pdf):
 
     return _fix_numeric(df)[[*COLUMN_NAMES, "plant_location", "date_inserted", "source"]]
 
-# -----------------------------------------------------------------------------
-if __name__ == "__main__":
-    import sys, pathlib
-    if len(sys.argv) < 2:
-        print("Uso: python purina_pdf_reader.py <archivo.pdf>")
-        sys.exit(1)
-    path = pathlib.Path(sys.argv[1])
-    d = read_file(path)
-    print(d.head())
-    out = path.with_suffix(".parquet")
-    d.to_parquet(out, index=False)
-    print("→", out)
+# --------------------------------------------------------------------------- #
+# Uso:
+# >>> df = read_file("2024.10.07 Statesville.pdf")
+# >>> df.to_excel("statesville.xlsx", index=False)
+# --------------------------------------------------------------------------- #
