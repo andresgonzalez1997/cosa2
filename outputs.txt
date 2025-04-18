@@ -1,16 +1,133 @@
-[DEBUG] Nombre base para la tabla temporal: 2024_10_07_statesville
-uploading data to comp_price_horizontal_files
-export_data_to_parquet_file
-upload_parquet_file_to_hdfs
-upload_parquet_file_to_hdfs done.
-create_temp_table_from_parquet_file
-[DEBUG] Columns in temp table comp_price_horizontal_files_2024_10_07_statesville after creation: [('product_number', 'string'), ('formula_code', 'string'), ('product_name', 'string'), ('product_form', 'string'), ('unit_weight', 'string'), ('pallet_quantity', 'double'), ('stocking_status', 'string'), ('min_order_quantity', 'double'), ('days_lead_time', 'double'), ('fob_or_dlv', 'string'), ('price_change', 'double'), ('list_price', 'double'), ('full_pallet_price', 'double'), ('half_load_full_pallet_price', 'double'), ('full_load_full_pallet_price', 'double'), ('full_load_best_price', 'double'), ('plant_location', 'string'), ('date_inserted', 'string'), ('source', 'string')]
-#########################################################################
-temp table created from parquet file.
-[DEBUG] column_def for temp table: product_number,formula_code,product_name,product_form,unit_weight,pallet_quantity,stocking_status,min_order_quantity,days_lead_time,fob_or_dlv,price_change,list_price,full_pallet_price,half_load_full_pallet_price,full_load_full_pallet_price,full_load_best_price,plant_location,date_inserted,source
-#########################################################################
-File 'hdfs://nameservice1/prd/internal/anh_customer_profitability/comp_price_horizontal_files_2024_10_07_statesville/comp_price_horizontal_files_2024_10_07_statesville.parquet' has an incompatible Parquet schema for column 'prd_internal_anh_customer_profitability.comp_price_horizontal_files_2024_10_07_statesville.pallet_quantity'. Column type: DOUBLE, Parquet schema:
-optional int64 pallet_quantity [i:5 d:1 r:0]
+competitor_data/purina_file_horizontal.py
 
-[ERROR] Falló la subida a CDP.
-[INFO] Archivo '2024.10.07 Statesville.pdf' eliminado de SharePoint.
+from __future__ import annotations
+"""
+purina_file_horizontal.py – Captura y limpia PDFs Statesville
+=============================================================
+• Conservar la **primera fila real** de cada página.
+• Eliminar cabeceras (“PRODUCT NUMBER …”), fragmentos (“MIN / DAYS”)
+  y textos sueltos (“Price / Unit”, “Price in US Dollars”).
+• Normalizar números negativos (100‑ → ‑100) y añadir metadatos.
+"""
+import datetime as _dt
+import pathlib
+import re
+from typing import List, Optional
+
+import pandas as pd
+import tabula
+
+# --------------------------------------------------------------------------- #
+# 1. Columnas estándar
+# --------------------------------------------------------------------------- #
+COLUMN_NAMES: List[str] = [
+    "product_number", "formula_code", "product_name", "product_form",
+    "unit_weight", "pallet_quantity", "stocking_status", "min_order_quantity",
+    "days_lead_time", "fob_or_dlv", "price_change", "list_price",
+    "full_pallet_price", "half_load_full_pallet_price",
+    "full_load_full_pallet_price", "full_load_best_price",
+]
+
+# Cualquier columna que deba llegar como FLOAT / DOUBLE al Parquet
+NUMERIC_COLS: List[str] = [
+    "pallet_quantity", "min_order_quantity", "days_lead_time",
+    "price_change", "list_price", "full_pallet_price",
+    "half_load_full_pallet_price", "full_load_full_pallet_price",
+    "full_load_best_price",
+]
+
+# --------------------------------------------------------------------------- #
+# 2. Conversión numérica
+# --------------------------------------------------------------------------- #
+_NEG_RX = re.compile(r"\(([^)]+)\)$")            # (100)  → -100
+_NEG_TRAIL_RX = re.compile(r"^-?[\d,.]+-$")      # 100‑   → -100
+
+def _to_float(val):
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return None
+    s = str(val).strip()
+
+    sign = -1 if _NEG_RX.search(s) or _NEG_TRAIL_RX.match(s) else 1
+    s = s.strip("()‑").replace(",", "")
+
+    try:
+        return float(s) * sign
+    except ValueError:
+        return None
+
+def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    for col in NUMERIC_COLS:
+        if col in df.columns:
+            df[col] = df[col].apply(_to_float).astype("float64")
+    return df
+
+# --------------------------------------------------------------------------- #
+# 3. Metadatos (extractors)  ––– …rest of the module unchanged…
+# --------------------------------------------------------------------------- #
+# ↓↓↓  todo el contenido restante del archivo es idéntico a tu versión  ↓↓↓
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+cdp_interface/upload_data.py
+
+
+import pathlib
+import pyarrow.parquet as pq
+import pyarrow as pa
+import os
+import pandas as pd           #  ← import added
+
+class DataUpload:
+    PARQUET_FOLDER_PATH = "cdp_interface/exported_parquet_files"
+
+    def __init__(self, file_system, database):
+        self.fs  = file_system
+        self.db  = database
+
+    # --------------------------------------------------------------------- #
+    #                     main public method (unchanged)
+    # --------------------------------------------------------------------- #
+
+    # --------------------------------------------------------------------- #
+    # 1. Export to Parquet (small patch inside)
+    # --------------------------------------------------------------------- #
+    def export_data_to_parquet_file(self, data, table_name, file_name):
+        print("export_data_to_parquet_file")
+        try:
+            pathlib.Path(self.PARQUET_FOLDER_PATH).mkdir(exist_ok=True)
+
+            # ——— NEW: guarantee that no int64 columns survive ———
+            int_cols = data.select_dtypes(include="int").columns
+            if len(int_cols):
+                data = data.astype({c: "float64" for c in int_cols})
+
+            new_file_path = (
+                pathlib.Path(self.PARQUET_FOLDER_PATH)
+                / f"{table_name}_{file_name}.parquet"
+            )
+            parquet_table = pa.Table.from_pandas(data, preserve_index=False)
+            pq.write_table(parquet_table, where=new_file_path, version="1.0")
+            return new_file_path
+        except Exception as ex:
+            print(f"[ERROR] --- export_data_to_parquet_file: {ex}")
+            return None
+
+    # --------------------------------------------------------------------- #
+    # 2. …the rest of the class is exactly the same as your original code…
+    # --------------------------------------------------------------------- #
+
+
+
+
+
