@@ -1,239 +1,49 @@
-from __future__ import annotations
-"""
-purina_pdf_reader.py – capturar tablas Statesville sin perder la primera fila
-=============================================================================
-• Conservar la **primera línea de datos** de cada página.
-• Eliminar cabeceras repetidas (“PRODUCT NUMBER …”), fragmentos (“MIN / DAYS”)
-  y textos sueltos como “Price / Unit” o “Price in US Dollars”.
-• Corregir números negativos (100‑  →  ‑100) y añadir metadatos.
-"""
-import datetime as _dt
-import pathlib
-import re
-from typing import List, Optional
+ValueError: The truth value of a DataFrame is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+ValueError                                Traceback (most recent call last)
+/tmp/ipykernel_117/1215835711.py in <module>
+      1 if __name__ == "__main__":
+----> 2     excecute_process()
 
-import pandas as pd
-import tabula
+/tmp/ipykernel_117/1010927215.py in excecute_process()
+     35 
+     36         # Parsear (horizontal)
+---> 37         df = pfh.read_file(str(local_pdf_path))
+     38 
+     39         # Observa columnas
 
-# --------------------------------------------------------------------------- #
-# 1. Nombres y columnas estándar
-# --------------------------------------------------------------------------- #
-COLUMN_NAMES: List[str] = [
-    "product_number", "formula_code", "product_name", "product_form",
-    "unit_weight", "pallet_quantity", "stocking_status", "min_order_quantity",
-    "days_lead_time", "fob_or_dlv", "price_change", "list_price",
-    "full_pallet_price", "half_load_full_pallet_price",
-    "full_load_full_pallet_price", "full_load_best_price", "species",
-    "date_inserted", "plant_location", "source",
-]
+~/competitor_data/purina_file_horizontal.py in read_file(pdf_path)
+    207     tables = _read_tables(pdf_path)
+    208     std_tables = filter(None, (_standardize_table(t) for t in tables))
+--> 209     data = pd.concat(std_tables, ignore_index=True) if tables else pd.DataFrame()
+    210 
+    211     if data.empty:
 
-# Numeric columns coerced to float so Parquet columns match DOUBLE in Impala
-NUMERIC_COLS: List[str] = [
-    "pallet_quantity", "min_order_quantity", "days_lead_time",
-] + COLUMN_NAMES[10:]
+~/.local/lib/python3.7/site-packages/pandas/util/_decorators.py in wrapper(*args, **kwargs)
+    309                     stacklevel=stacklevel,
+    310                 )
+--> 311             return func(*args, **kwargs)
+    312 
+    313         return wrapper
 
-# Posición “segura” del bloque fecha‑planta (primeros 50 px)
-DATE_RX = re.compile(r"\d{1,2}/\d{1,2}/(\d{4}|\d{2})")
-LOC_RX = re.compile(r"(STATESVILLE|HUDSON'S|[A-Z]{2}\-[A-Z]+)")
+~/.local/lib/python3.7/site-packages/pandas/core/reshape/concat.py in concat(objs, axis, join, ignore_index, keys, levels, names, verify_integrity, sort, copy)
+    302         verify_integrity=verify_integrity,
+    303         copy=copy,
+--> 304         sort=sort,
+    305     )
+    306 
 
+~/.local/lib/python3.7/site-packages/pandas/core/reshape/concat.py in __init__(self, objs, axis, join, keys, levels, names, ignore_index, verify_integrity, copy, sort)
+    346             objs = [objs[k] for k in keys]
+    347         else:
+--> 348             objs = list(objs)
+    349 
+    350         if len(objs) == 0:
 
-# --------------------------------------------------------------------------- #
-# 2. Helpers para Tabula
-# --------------------------------------------------------------------------- #
+~/.local/lib/python3.7/site-packages/pandas/core/generic.py in __nonzero__(self)
+   1536     def __nonzero__(self):
+   1537         raise ValueError(
+-> 1538             f"The truth value of a {type(self).__name__} is ambiguous. "
+   1539             "Use a.empty, a.bool(), a.item(), a.any() or a.all()."
+   1540         )
 
-def _read_tables(pdf_path: str | pathlib.Path) -> List[pd.DataFrame]:
-    """Lee todas las tablas con Tabula (lattice) y las devuelve como lista."""
-    return tabula.read_pdf(
-        str(pdf_path),
-        guess=False,
-        pages="all",
-        lattice=True,
-        pandas_options={"header": None, "dtype": str},
-    )
-
-
-def _first_table(pdf: str | pathlib.Path, area: List[float]) -> Optional[str]:
-    """Devuelve el texto bruto de la primera tabla encontrada en *area*."""
-    try:
-        tables = tabula.read_pdf(
-            str(pdf),
-            pages=1,
-            guess=False,
-            area=area,
-            lattice=True,
-            pandas_options={"header": None, "dtype": str},
-        )
-        return "\n".join(" ".join(row.dropna()) for row in tables[0].iloc)
-    except Exception:
-        return None
-
-
-# --------------------------------------------------------------------------- #
-# 3. Metadatos: fecha efectiva y planta
-# --------------------------------------------------------------------------- #
-
-def effective_date(pdf):
-    text = _first_table(pdf, [50, 0, 200, 400])
-    if not text:
-        return None
-    m = DATE_RX.search(text)
-    if not m:
-        return None
-    for fmt in ("%m/%d/%Y", "%m/%d/%y"):
-        try:
-            return _dt.datetime.strptime(m.group(0), fmt).date().isoformat()
-        except ValueError:
-            pass
-    return None
-
-
-def plant_location(pdf):
-    text = _first_table(pdf, [0, 0, 50, 250])
-    if not text:
-        return None
-    if "HUDSON'S" in text:
-        return "HUDSON'S"
-    m = LOC_RX.search(text)
-    return m.group(1) if m else None
-
-# --------------------------------------------------------------------------- #
-# 4. Detección de filas‑cabecera / fragmentos
-# --------------------------------------------------------------------------- #
-HEADER_TOKENS = {
-    "PRODUCT", "FORM", "UNIT", "WEIGHT", "PALLET", "MIN", "ORDER",
-    "QUANTITY", "DAYS", "LEAD", "TIME", "STOCKING", "STATUS", "FOB", "DLV",
-}
-PRICE_HEADER_PATTERNS = (
-    "PRICE / UNIT",
-    "PRICE IN US DOLLAR",   # sin ‘S’ (algunas hojas vienen así)
-    "PRICE IN US DOLLARS",
-    "MONTHLY",
-    "PAGE",                 # “Page 2 of 13”
-)
-
-# pre‑compilado para búsqueda más rápida en toda la fila
-_PRICE_RE = re.compile("|".join(re.escape(p) for p in PRICE_HEADER_PATTERNS), re.I)
-
-
-def _is_header_row(row: pd.Series) -> bool:
-    """True si la fila es cabecera/fragmento y debe eliminarse."""
-    combined = " ".join(str(x) for x in row.dropna()).upper()
-
-    # 1. Fila con uno de los patrones PRICE_HEADER_PATTERNS
-    if _PRICE_RE.search(combined):
-        return True
-
-    # --- 2. Reglas clásicas (primera celda) ------------------------------
-    first = str(row.iloc[0]).strip().upper()
-
-    # no eliminar si comienza por dígito (fila de datos)
-    if first and first[0].isdigit():
-        return False
-
-    # Cabecera principal
-    if first.startswith("PRODUCT") and str(row.iloc[1]).upper().startswith("FORMULA"):
-        return True
-
-    # Fragmentos (MIN / DAYS etc.) – sólo si no tienen precios
-    if pd.isna(row["list_price"]):
-        if any(tok in combined for tok in HEADER_TOKENS):
-            return True
-
-    return False
-
-
-# --------------------------------------------------------------------------- #
-# 5. Limpieza numérica
-# --------------------------------------------------------------------------- #
-
-_NEG_RE = re.compile(r"(\d)[\s\u00a0]*‑[\s\u00a0]*$")
-_PAREN_RE = re.compile(r"^\((\d.*)\)$")
-_COMMA_RE = re.compile(r",|")
-
-
-def _to_float(s: str | float | int | None):
-    if s is None or pd.isna(s):
-        return None
-    s = str(s).strip()
-
-    # “100‑ ” (espacio/nobreak) → “‑100”
-    m = _NEG_RE.search(s)
-    if m:
-        s = "‑" + m.group(1)
-
-    # “(123.45)” → “‑123.45”
-    m = _PAREN_RE.match(s)
-    if m:
-        s = "-" + m.group(1)
-
-    # elimina comas de miles
-    s = _COMMA_RE.sub("", s)
-
-    try:
-        return float(s)
-    except ValueError:
-        return None
-
-
-def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
-    for col in NUMERIC_COLS:
-        if col in df.columns:
-            df[col] = df[col].apply(_to_float)
-    return df
-
-# --------------------------------------------------------------------------- #
-# 6. Estandarizar tablas parciales
-# --------------------------------------------------------------------------- #
-
-def _standardize_table(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
-    if tbl.shape[1] < 12:
-        return None
-
-    tbl.columns = range(tbl.shape[1])
-    tbl = tbl.iloc[:, :len(COLUMN_NAMES)]
-    tbl.columns = COLUMN_NAMES[:tbl.shape[1]]
-
-    # elimina filas de cabecera/fragmentos
-    tbl = tbl[~tbl.apply(_is_header_row, axis=1)]
-
-    return tbl
-
-# --------------------------------------------------------------------------- #
-# 7. API pública
-# --------------------------------------------------------------------------- #
-
-def read_file(pdf_path: str | pathlib.Path) -> pd.DataFrame:
-    """Lee todo el PDF y devuelve un DataFrame limpio y listo."""
-    tables = _read_tables(pdf_path)
-    std_tables = filter(None, (_standardize_table(t) for t in tables))
-    data = pd.concat(std_tables, ignore_index=True) if tables else pd.DataFrame()
-
-    if data.empty:
-        return data
-
-    # Limpieza numérica + metadatos
-    data = _fix_numeric(data)
-
-    eff_date = effective_date(pdf_path)
-    location = plant_location(pdf_path)
-    now = _dt.datetime.utcnow().isoformat(" ", timespec="seconds")
-
-    data["date_inserted"] = eff_date or now[:10]
-    data["plant_location"] = location
-    data["source"] = pathlib.Path(pdf_path).name
-
-    # Final sanity sort (by product_number if present)
-    if "product_number" in data.columns:
-        data = data.sort_values("product_number", ignore_index=True)
-
-    return data
-
-
-# --------------------------------------------------------------------------- #
-# 8. CLI de prueba rápida
-# --------------------------------------------------------------------------- #
-if __name__ == "__main__":
-    import sys
-    pdf = sys.argv[1] if len(sys.argv) > 1 else "2024.10.07 Statesville.pdf"
-    df = read_file(pdf)
-    print(df.head())
+ValueError: The truth value of a DataFrame is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
