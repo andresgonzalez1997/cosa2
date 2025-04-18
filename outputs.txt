@@ -2,7 +2,7 @@ from __future__ import annotations
 """
 purina_file_horizontal.py – captura y limpia PDFs Statesville (layout horizontal)
 ================================================================================
-(… encabezado idéntico …)
+— recorta cabeceras, normaliza números y añade metadatos —
 """
 import datetime as _dt
 import pathlib
@@ -12,9 +12,9 @@ from typing import List, Optional
 import pandas as pd
 import tabula
 
-# --------------------------------------------------------------------------- #
-# 1. Columnas estándar
-# --------------------------------------------------------------------------- #
+# -------------------------------------------------------------------- #
+# 1. columnas estándar
+# -------------------------------------------------------------------- #
 COLUMN_NAMES: List[str] = [
     "product_number", "formula_code", "product_name", "product_form",
     "unit_weight", "pallet_quantity", "stocking_status", "min_order_quantity",
@@ -30,12 +30,11 @@ NUMERIC_COLS: List[str] = [
     "full_load_best_price",
 ]
 
-# --------------------------------------------------------------------------- #
-# 2. Conversión numérica
-# --------------------------------------------------------------------------- #
-_NEG_RX        = re.compile(r"\(([^)]+)\)$")
-_NEG_TRAIL_RX  = re.compile(r"^-?[\d,.]+-$")
-_COMMA_RX      = re.compile(r"[, ]")
+# -------------------------------------------------------------------- #
+# 2. helpers numéricos
+# -------------------------------------------------------------------- #
+_NEG_RX, _NEG_TRAIL_RX = re.compile(r"\(([^)]+)\)$"), re.compile(r"^-?[\d,.]+-$")
+_COMMA_RX = re.compile(r"[, ]")
 
 def _to_float(val):
     if val is None or (isinstance(val, float) and pd.isna(val)):
@@ -54,22 +53,20 @@ def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = df[col].apply(_to_float).astype("float64")
     return df
 
-# --------------------------------------------------------------------------- #
-# 3. Metadatos
-# --------------------------------------------------------------------------- #
-DATE_RX  = re.compile(r"(\d{1,2}/\d{1,2}/\d{2,4})")
-PLANT_RX = re.compile(r"\bPLANT:\s*([A‑Za‑z ]+)", re.I)
+# -------------------------------------------------------------------- #
+# 3. metadatos (fecha y planta)
+# -------------------------------------------------------------------- #
+DATE_RX, PLANT_RX = re.compile(r"(\d{1,2}/\d{1,2}/\d{2,4})"), re.compile(r"\bPLANT:\s*([A-Za-z ]+)", re.I)
 
 def _first_table(pdf, area):
     try:
-        tbls = tabula.read_pdf(
-            pdf, pages=1, lattice=True, guess=False, area=area,
-            pandas_options={"dtype": str, "header": None})
+        tbls = tabula.read_pdf(pdf, pages=1, lattice=True, guess=False,
+                               area=area, pandas_options={"dtype": str, "header": None})
         return str(tbls[0]) if tbls else None
     except Exception:
         return None
 
-def effective_date(pdf) -> Optional[str]:
+def effective_date(pdf):
     text = _first_table(pdf, [50, 0, 200, 400])
     if not text:
         return None
@@ -83,20 +80,17 @@ def effective_date(pdf) -> Optional[str]:
             continue
     return None
 
-def plant_location(pdf) -> Optional[str]:
+def plant_location(pdf):
     text = _first_table(pdf, [0, 400, 100, 800])
     if not text:
         return None
     m = PLANT_RX.search(text)
     return m.group(1).strip().title() if m else None
 
-# --------------------------------------------------------------------------- #
-# 4. Filtros de filas basura
-# --------------------------------------------------------------------------- #
-HEADER_TOKENS = (
-    "PRODUCT NUMBER", "PRODUCT DESC", "PRICE CHANGE", "PRICE IN US DOLLARS",
-    "MONTHLY", "PAGE",
-)
+# -------------------------------------------------------------------- #
+# 4. filas basura
+# -------------------------------------------------------------------- #
+HEADER_TOKENS = ("PRODUCT NUMBER","PRODUCT DESC","PRICE CHANGE","PRICE IN US DOLLARS","MONTHLY","PAGE")
 _PRICE_RE = re.compile("|".join(re.escape(t) for t in HEADER_TOKENS), re.I)
 
 def _is_header_row(row: pd.Series) -> bool:
@@ -108,28 +102,20 @@ def _is_header_row(row: pd.Series) -> bool:
         return True
     return False
 
-# --------------------------------------------------------------------------- #
-# 5. Lectura, estandarización y limpieza
-# --------------------------------------------------------------------------- #
+# -------------------------------------------------------------------- #
+# 5. lectura y limpieza
+# -------------------------------------------------------------------- #
 def _read_tables(pdf):
-    return tabula.read_pdf(
-        pdf, pages="all", lattice=True, guess=False,
-        pandas_options={"dtype": str, "header": None}
-    )
+    return tabula.read_pdf(pdf, pages="all", lattice=True, guess=False,
+                           pandas_options={"dtype": str, "header": None})
 
 _COLUMN_MAP = {
-    "PRODUCT NUMBER": "product_number",
-    "FORMULA CODE":   "formula_code",
-    "PRODUCT DESC.":  "product_name",
-    "PRODUCT FORM":   "product_form",
-    "UNIT  WEIGHT":   "unit_weight",
-    "PALLET  QUANTITY": "pallet_quantity",
-    "STOCKING  STATUS": "stocking_status",
-    "MIN ORDER  QUANTITY": "min_order_quantity",
-    "DAYS  LEAD  TIME": "days_lead_time",
-    "FOB / DLV": "fob_or_dlv",
-    "PRICE  CHANGE": "price_change",
-    "LIST  PRICE": "list_price",
+    "PRODUCT NUMBER": "product_number",        "FORMULA CODE": "formula_code",
+    "PRODUCT DESC.":  "product_name",          "PRODUCT FORM": "product_form",
+    "UNIT  WEIGHT":   "unit_weight",           "PALLET  QUANTITY": "pallet_quantity",
+    "STOCKING  STATUS": "stocking_status",     "MIN ORDER  QUANTITY": "min_order_quantity",
+    "DAYS  LEAD  TIME": "days_lead_time",      "FOB / DLV": "fob_or_dlv",
+    "PRICE  CHANGE": "price_change",           "LIST  PRICE": "list_price",
     "FULL  PALLET  PRICE": "full_pallet_price",
     "HALF  LOAD  FULL  PALLET  PRICE": "half_load_full_pallet_price",
     "FULL  LOAD  FULL  PALLET  PRICE": "full_load_full_pallet_price",
@@ -143,26 +129,23 @@ def _standardize_table(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = [h.strip() or f"col_{i}" for i, h in enumerate(header)]
     df = df.iloc[1:].reset_index(drop=True)
     df.rename(columns=_COLUMN_MAP, inplace=True)
-    keep = [c for c in COLUMN_NAMES if c in df.columns]
-    return df[keep]
+    return df[[c for c in COLUMN_NAMES if c in df.columns]]
 
-def read_file(pdf_path: str | pathlib.Path) -> pd.DataFrame:
+def read_file(pdf_path) -> pd.DataFrame:
     pdf = str(pdf_path)
     tables = _read_tables(pdf)
 
-    # --------- 🔧   ESTA ES LA LÍNEA CAMBIADA   🔧 -------------------------
-    std_tables = [
-        t for t in (_standardize_table(tbl) for tbl in tables) if not t.empty
-    ]
-    # ----------------------------------------------------------------------
+    # ---------- filtro seguro ----------
+    std_tables = [t for t in (_standardize_table(tbl) for tbl in tables) if not t.empty]
 
+    # ---------- concat ----------
     data = pd.concat(std_tables, ignore_index=True) if std_tables else pd.DataFrame()
     data = data[~data.apply(_is_header_row, axis=1)].reset_index(drop=True)
     data.dropna(how="all", inplace=True)
 
+    # metadatos
     data["plant_location"] = plant_location(pdf)
     data["date_inserted"]  = effective_date(pdf)
     data["source"]         = "pdf"
 
-    return _fix_numeric(data)[[*COLUMN_NAMES, "plant_location",
-                               "date_inserted", "source"]]
+    return _fix_numeric(data)[[*COLUMN_NAMES, "plant_location", "date_inserted", "source"]]
