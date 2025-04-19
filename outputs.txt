@@ -1,208 +1,48 @@
-from __future__ import annotations
-"""
-purina_file_horizontal.py
--------------------------
-Lectura y limpieza de PDFs **horizontales** de Purina (Statesville layout).
+import re, datetime as _dt
+from pathlib import Path
+from PyPDF2 import PdfReader   # ya lo usas; si no, pip install PyPDF2
 
-• Conservar la primera línea real de datos de cada página.
-• Eliminar cabeceras repetidas ("PRODUCT NUMBER …"), fragmentos ("MIN / DAYS")
-  y textos sueltos como "Price / Unit" o "Price in US Dollars".
-• Corregir números negativos (100‑  →  ‑100) y añadir metadatos
-  (fecha efectiva y planta) que luego usa el pipeline.
+# ---------------------------------------------------------------------
+# 1) FECHA EFECTIVA ----------------------------------------------------
+# ---------------------------------------------------------------------
+_FECHA_RX = re.compile(
+    r'(\d{1,2}/\d{1,2}/\d{4})\s*Effective Date', re.I)
 
-Usar la función pública:
-    >>> df = read_file("2024.10.07 Statesville.pdf")
-Devuelve un **pandas.DataFrame** con 19 columnas estándar, listo para cargar.
-"""
+def extract_effective_date(pdf_path: str | Path) -> _dt.date:
+    """
+    Devuelve la fecha efectiva buscándola **antes** del texto
+    'Effective Date' (funciona aunque la fecha y el rótulo estén pegados).
+    """
+    reader = PdfReader(str(pdf_path))
+    first_page_text = reader.pages[0].extract_text()
 
-import datetime as _dt
-import pathlib
-import re
-from typing import List, Optional
-
-import pandas as pd
-import tabula
-
-# --------------------------------------------------------------------------- #
-# 1. Nombres estándar (16 columnas del PDF original)
-# --------------------------------------------------------------------------- #
-COLUMN_NAMES: List[str] = [
-    "product_number", "formula_code", "product_name", "product_form",
-    "unit_weight", "pallet_quantity", "stocking_status", "min_order_quantity",
-    "days_lead_time", "fob_or_dlv", "price_change", "list_price",
-    "full_pallet_price", "half_load_full_pallet_price",
-    "full_load_full_pallet_price", "full_load_best_price",
-]
-
-# --------------------------------------------------------------------------- #
-# 2. Columnas numéricas que se convertirán a float (→ Parquet DOUBLE)
-# --------------------------------------------------------------------------- #
-# «pallet_quantity», «min_order_quantity» y «days_lead_time» salen como int64;
-# al forzarlos a float evitamos el error de esquema Incompatible Parquet/Impala.
-NUMERIC_COLS: List[str] = [
-    "pallet_quantity", "min_order_quantity", "days_lead_time",
-] + COLUMN_NAMES[10:]  # todas las columnas de precios
-
-# --------------------------------------------------------------------------- #
-# 3. Regex de fecha y planta (metadatos)
-# --------------------------------------------------------------------------- #
-DATE_RX = re.compile(r"\d{1,2}/\d{1,2}/(?:\d{4}|\d{2})")
-LOC_RX = re.compile(r"\b(STATESVILLE|HUDSON'S|[A-Z ]+ NC)\b", re.I)
-
-# --------------------------------------------------------------------------- #
-# 4. Utilidades Tabula
-# --------------------------------------------------------------------------- #
-
-def _first_table(pdf: str | pathlib.Path, area) -> str:
-    try:
-        t = tabula.read_pdf(
-            pdf,
-            pages=1,
-            lattice=True,
-            guess=False,
-            area=area,
-            pandas_options={"header": None, "dtype": str},
-        )[0]
-        return " ".join(t.astype(str).values.ravel())
-    except Exception:
-        return ""
-
-
-def effective_date(pdf):
-    text = _first_table(pdf, [50, 0, 200, 400])
-    m = DATE_RX.search(text)
+    m = _FECHA_RX.search(first_page_text)
     if not m:
-        return None
-    for fmt in ("%m/%d/%Y", "%m/%d/%y"):
-        try:
-            return _dt.datetime.strptime(m.group(0), fmt).date().isoformat()
-        except ValueError:
-            pass
-    return None
+        # fallback por si el layout cambiara y la fecha aparece *después*
+        m = re.search(r'Effective Date\s*-\s*(\d{1,2}/\d{1,2}/\d{4})',
+                      first_page_text, re.I)
+    if not m:
+        raise ValueError("No se encontró la fecha efectiva en el PDF.")
 
+    return _dt.datetime.strptime(m.group(1), "%m/%d/%Y").date()
 
-def plant_location(pdf):
-    text = _first_table(pdf, [0, 0, 50, 250])
-    if "HUDSON'S" in text.upper():
-        return "HUDSON'S"
-    m = LOC_RX.search(text)
-    return m.group(1) if m else None
+# ---------------------------------------------------------------------
+# 2) PLANTA / UBICACIÓN ------------------------------------------------
+# ---------------------------------------------------------------------
+_PLANT_RX = re.compile(
+    r'\d{3,4}-([A-Z][A-Z ]+?)\s+[A-Z]{2}\b')   # ej. 1244-STATESVILLE NC
 
-# --------------------------------------------------------------------------- #
-# 5. Lectura de Tablas con Tabula
-# --------------------------------------------------------------------------- #
+def extract_plant_location(pdf_path: str | Path) -> str:
+    """
+    Extrae la planta/ubicación que aparece en la esquina superior **derecha**,
+    justo después del guion y antes del código de estado (NC, GA, TX, …).
+    """
+    reader = PdfReader(str(pdf_path))
+    first_page_text = reader.pages[0].extract_text()
 
-def _read_tables(pdf):
-    try:
-        return tabula.read_pdf(
-            pdf,
-            pages="all",
-            lattice=True,
-            guess=False,
-            pandas_options={"dtype": str, "header": None},
-        )
-    except Exception as exc:
-        print("[tabula]", exc)
-        return []
+    m = _PLANT_RX.search(first_page_text)
+    if not m:
+        raise ValueError("No se encontró la planta/ubicación en el PDF.")
 
-# --------------------------------------------------------------------------- #
-# 6. Normalización de cada tabla
-# --------------------------------------------------------------------------- #
-
-def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """Recorta a 16 columnas y corrige desplazamientos (17 columnas)."""
-    # Demasiado corta → descartar.
-    if tbl.shape[1] < 16:
-        return None
-
-    # Caso habitual de desplazamiento: 17 columnas (primera = categoría)
-    if tbl.shape[1] >= 17:
-        first, second = tbl.iloc[:, 0], tbl.iloc[:, 1]
-        numeric_like = second.astype(str).str[0].str.isdigit().mean() > 0.5
-        tbl = tbl.iloc[:, 1:17] if numeric_like else tbl.iloc[:, :16]
-    else:
-        tbl = tbl.iloc[:, :16]
-
-    tbl.columns = COLUMN_NAMES
-    return tbl
-
-# --------------------------------------------------------------------------- #
-# 7. Conversión numérica (puntual) – evita errores Parquet/Impala
-# --------------------------------------------------------------------------- #
-
-def _to_float(s: str):
-    if pd.isna(s):
-        return None
-    s = str(s).replace(",", "").strip()
-    sign = -1 if s.endswith("-") or (s.startswith("(") and s.endswith(")")) else 1
-    s = s.strip("()- ")
-    try:
-        return float(s) * sign
-    except ValueError:
-        return None
-
-
-def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
-    for col in NUMERIC_COLS:
-        if col in df.columns:
-            df[col] = df[col].apply(_to_float)
-    return df
-
-# --------------------------------------------------------------------------- #
-# 8. Filtro de filas‑cabecera / fragmentos
-# --------------------------------------------------------------------------- #
-HEADER_TOKENS = {
-    "PRODUCT", "FORM", "UNIT", "WEIGHT", "PALLET", "MIN", "ORDER",
-    "QUANTITY", "DAYS", "LEAD", "TIME", "STOCKING", "STATUS", "FOB", "DLV",
-}
-PRICE_HEADER_PATTERNS = (
-    "PRICE / UNIT",
-    "PRICE IN US DOLLAR",
-    "PRICE IN US DOLLARS",
-    "MONTHLY",
-    "PAGE",  # "Page 2 of 13"
-)
-_PRICE_RE = re.compile("|".join(re.escape(p) for p in PRICE_HEADER_PATTERNS), re.I)
-
-
-def _is_header_row(row: pd.Series) -> bool:
-    """Devuelve True si la fila es cabecera u otro fragmento que debe eliminarse."""
-    combined = " ".join(row.astype(str)).upper()
-    if _PRICE_RE.search(combined):
-        return True
-    first = str(row.iloc[0]).strip().upper()
-    if first and first[0].isdigit():
-        return False
-    if first.startswith("PRODUCT") and str(row.iloc[1]).upper().startswith("FORMULA"):
-        return True
-    if pd.isna(row["list_price"]):
-        if any(tok in combined for tok in HEADER_TOKENS):
-            return True
-    return False
-
-# --------------------------------------------------------------------------- #
-# 9. Función principal
-# --------------------------------------------------------------------------- #
-
-def read_file(pdf: str | pathlib.Path) -> pd.DataFrame:
-    """Procesa un PDF y devuelve un DataFrame limpio y estandarizado."""
-    tables = _read_tables(str(pdf))
-
-    # Normaliza cada tabla y descarta las vacías
-    std_tables = [t for t in (_standardize(x) for x in tables) if t is not None]
-    if not std_tables:
-        return pd.DataFrame()
-
-    df = pd.concat(std_tables, ignore_index=True)
-
-    # Elimina cabeceras/fragmentos pero conserva la primera fila de datos real
-    df = df[~df.apply(_is_header_row, axis=1)].reset_index(drop=True)
-    df.dropna(how="all", inplace=True)
-
-    # Metadatos
-    df["plant_location"] = plant_location(pdf)
-    df["date_inserted"] = effective_date(pdf)
-    df["source"] = pathlib.Path(pdf).name
-
-    df = _fix_numeric(df)
-    return df[[*COLUMN_NAMES, "plant_location", "date_inserted", "source"]]
+    # Devuelve capitalizado (“Statesville”, “St Louis”, etc.).
+    return m.group(1).title().strip()
