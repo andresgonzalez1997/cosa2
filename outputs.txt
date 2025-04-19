@@ -1,3 +1,42 @@
-# admite 1‑2 dígitos, separador “/” **o** “‑”, y año de 2‑o‑4 dígitos
-_FECHA_RX = re.compile(
-    r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*Effective\s+Date', re.I)
+ValueError: time data '01-06-2025' does not match format '%m/%d/%Y'
+ValueError                                Traceback (most recent call last)
+/tmp/ipykernel_115/1215835711.py in <module>
+      1 if __name__ == "__main__":
+----> 2     excecute_process()
+
+/tmp/ipykernel_115/1010927215.py in excecute_process()
+     35 
+     36         # Parsear (horizontal)
+---> 37         df = pfh.read_file(str(local_pdf_path))
+     38 
+     39         # Observa columnas
+
+~/competitor_data/purina_file_horizontal.py in read_file(pdf)
+    226     # Metadatos
+    227     df["plant_location"] = extract_plant_location(pdf)
+--> 228     df["date_inserted"] = extract_effective_date(pdf)
+    229     df["source"] = pathlib.Path(pdf).name
+    230 
+
+~/competitor_data/purina_file_horizontal.py in extract_effective_date(pdf_path)
+     91         raise ValueError("No se encontró la fecha efectiva en el PDF.")
+     92 
+---> 93     return _dt.datetime.strptime(m.group(1), "%m/%d/%Y").date()
+     94 
+     95 # ---------------------------------------------------------------------
+
+/usr/local/lib/python3.7/_strptime.py in _strptime_datetime(cls, data_string, format)
+    575     """Return a class cls instance based on the input string and the
+    576     format string."""
+--> 577     tt, fraction, gmtoff_fraction = _strptime(data_string, format)
+    578     tzname, gmtoff = tt[-2:]
+    579     args = tt[:6] + (fraction,)
+
+/usr/local/lib/python3.7/_strptime.py in _strptime(data_string, format)
+    357     if not found:
+    358         raise ValueError("time data %r does not match format %r" %
+--> 359                          (data_string, format))
+    360     if len(data_string) != found.end():
+    361         raise ValueError("unconverted data remains: %s" %
+
+ValueError: time data '01-06-2025' does not match format '%m/%d/%Y'
