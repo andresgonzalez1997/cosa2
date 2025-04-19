@@ -1,8 +1,0 @@
-{
-    "host": "drona-hue.cargill.com",
-    "impala_host": "drona-impala.cargill.com",
-    "hdfs_root_folder": "/dev/internal/anh_customer_profitability/",
-    "webhdfs": "https://drona-haproxy.cargill.com:8443/gateway/drona",
-    "port": "21050",
-    "schema": "dev_internal_anh_customer_profitability"
-}
