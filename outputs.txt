@@ -1,41 +1,44 @@
--- 1-A  Copia 1: respaldo “congelado” para auditoría
-CREATE TABLE comp_price_grid_bkp_20250425 LIKE comp_price_grid;
+/* ================================================================
+   █ 0 ░ (solo si aún NO existe) ⇒ Vista de staging normalizada
+   ----------------------------------------------------------------
+   Asegura que comp_price_horizontal tenga las mismas columnas que
+   comp_price_grid antes de fusionar.
+================================================================ */
+CREATE OR REPLACE VIEW vw_comp_price_horizontal_norm AS
+SELECT
+    product_number              AS product_number,
+    formula_code                AS formula_code,
+    product_desc                AS product_name,
+    unit_weight                 AS unit_weight,
+    NULL                        AS pallet_quantity,
+    NULL                        AS stocking_status,
+    NULL                        AS min_order_quantity,
+    NULL                        AS days_lead_time,
+    fob_or_dlv                  AS fob_or_dlv,
+    change_in_price             AS price_change,
+    list_price                  AS single_unit_list_price,
+    full_pallet_price           AS full_pallet_list_price,
+    full_load_full_pallet_price AS pkg_bulk_discount,
+    full_load_best_price        AS best_net_price,
+    CURRENT_DATE()              AS load_dt
+FROM comp_price_horizontal;
+
+/* ================================================================
+   █ 1 ░ Respaldo completo de la tabla productiva
+================================================================ */
+CREATE TABLE comp_price_grid_bkp_20250425
+LIKE comp_price_grid;
+
 INSERT INTO comp_price_grid_bkp_20250425
 SELECT * FROM comp_price_grid;
 
--- 1-B  Copia 2: “dummy” sobre la que harás todas las pruebas
-CREATE TABLE comp_price_grid_dummy LIKE comp_price_grid;
-INSERT INTO comp_price_grid_dummy
-SELECT * FROM comp_price_grid;
+/* ================================================================
+   █ 2 ░ MERGE productivo (upsert) – Horizontal ➜ Vertical
+================================================================ */
+MERGE INTO comp_price_grid               AS tgt
+USING vw_comp_price_horizontal_norm      AS src
+ON tgt.product_number = src.product_number
 
--------------------------------------------------------------------
-SELECT COUNT(*) FROM comp_price_grid;          -- n_original
-SELECT COUNT(*) FROM comp_price_grid_dummy;    -- debe ser = n_original
-
--------------------------------------------------------------------
-CREATE OR REPLACE VIEW vw_comp_price_horizontal_norm AS
-SELECT
-    product_number                           AS product_number,       -- clave
-    formula_code                             AS formula_code,
-    product_desc                             AS product_name,         -- ↔ Product Name
-    unit_weight                              AS unit_weight,
-    NULL                                     AS pallet_quantity,      -- “Not needed” en vertical
-    NULL                                     AS stocking_status,
-    NULL                                     AS min_order_quantity,
-    NULL                                     AS days_lead_time,
-    fob_or_dlv                               AS fob_or_dlv,
-    change_in_price                          AS price_change,
-    list_price                               AS single_unit_list_price,
-    full_pallet_price                        AS full_pallet_list_price,
-    full_load_full_pallet_price              AS pkg_bulk_discount,    -- si aplica
-    full_load_best_price                     AS best_net_price,
-    CURRENT_DATE()                           AS load_dt               -- opcional: trazabilidad
-FROM comp_price_horizontal;
-
--------------------------------------------------------------------
-MERGE INTO comp_price_grid_dummy      AS tgt
-USING vw_comp_price_horizontal_norm   AS src
-ON tgt.product_number = src.product_number      --  ➜ clave de emparejamiento
 WHEN MATCHED THEN
   UPDATE SET
       tgt.formula_code             = src.formula_code,
@@ -67,29 +70,31 @@ WHEN NOT MATCHED THEN
       src.load_dt
   );
 
--------------------------------------------------------------------
--- Cuántas filas nuevas / actualizadas
-SELECT
-  COUNT(*)                        AS total_filas_dummy,
-  SUM(CASE WHEN load_dt = CURRENT_DATE() THEN 1 END) AS filas_nuevas_hoy
-FROM comp_price_grid_dummy;
-
--- Sube estadísticas para que Tableau las vea enseguida
-INVALIDATE METADATA comp_price_grid_dummy;
-COMPUTE STATS comp_price_grid_dummy;
-
--------------------------------------------------------------------
-CREATE TABLE comp_price_grid_bkp_premerge_20250425 LIKE comp_price_grid;
-INSERT INTO comp_price_grid_bkp_premerge_20250425
-SELECT * FROM comp_price_grid;
-
--------------------------------------------------------------------
+/* ================================================================
+   █ 3 ░ Refresca metadatos y estadísticas
+================================================================ */
 INVALIDATE METADATA comp_price_grid;
 COMPUTE STATS comp_price_grid;
--------------------------------------------------------------------
-TRUNCATE TABLE comp_price_grid;                 -- vacía la tabla dañada
-INSERT INTO comp_price_grid
-SELECT * FROM comp_price_grid_bkp_premerge_20250425;
-INVALIDATE METADATA comp_price_grid;
 
--------------------------------------------------------------------
+/* ================================================================
+   █ 4 ░ Verificación rápida posterior al MERGE
+================================================================ */
+SELECT
+    COUNT(*)                                     AS total_registros,
+    SUM(CASE WHEN load_dt = CURRENT_DATE() THEN 1 END) AS filas_de_hoy
+FROM comp_price_grid;
+
+/* ================================================================
+   █ 5 ░ ROLLBACK (ejecuta SOLO si algo salió mal)
+================================================================ */
+TRUNCATE TABLE comp_price_grid;
+INSERT INTO comp_price_grid
+SELECT * FROM comp_price_grid_bkp_20250425;
+
+INVALIDATE METADATA comp_price_grid;
+COMPUTE STATS comp_price_grid;
+
+/* ================================================================
+   █ 6 ░ Limpieza del respaldo (opcional, cuando estés 100 % seguro)
+================================================================ */
+-- DROP TABLE comp_price_grid_bkp_20250425;
