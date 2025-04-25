@@ -1,42 +1,81 @@
-INSERT INTO comp_price_grid (
-    product_number,
-    formula_code,
-    product_name,
-    product_form,
-    unit_weight,
-    pallet_quantity,
-    stocking_status,
-    min_order_quantity,
-    days_lead_time,
-    fob_or_dlv,
-    price_change,
-    list_price,
-    full_pallet_price,
-    half_load_full_pallet_price,
-    full_load_full_pallet_price,
-    full_load_best_price,
-    plant_location,
-    date_inserted,
-    source
-)
+CREATE OR REPLACE VIEW vw_comp_price_horizontal_norm AS
 SELECT
     product_number,
     formula_code,
     product_name,
-    product_form,
+    product_form,                  -- existe en horizontal
     unit_weight,
-    pallet_quantity,
-    stocking_status,
-    min_order_quantity,
-    days_lead_time,
     fob_or_dlv,
     price_change,
-    single_unit_list_price       AS list_price,
-    full_pallet_list_price       AS full_pallet_price,
-    pkg_bulk_discount            AS half_load_full_pallet_price,
-    pkg_bulk_discount            AS full_load_full_pallet_price,
-    best_net_price               AS full_load_best_price,
+    list_price                     AS single_unit_list_price,
+    full_pallet_price              AS full_pallet_list_price,
+    full_load_best_price           AS best_net_list_price,
+    species,                       -- deja NULL si tu tabla no lo trae
     plant_location,
-    date_inserted,
-    source
+    date_inserted
+FROM   comp_price_horizontal_files;   -- ← tu tabla original
+------------------------------------------------------------------------
+
+INSERT INTO comp_price_grid_dummy
+          (product_number, formula_code, product_name, ref_col,
+           unit_weight, product_form, fob_or_dlv, price_change,
+           single_unit_list_price, full_pallet_list_price,
+           pkg_bulk_discount,      best_net_list_price,
+           species, plant_location, date_inserted)
+SELECT
+    product_number,
+    formula_code,
+    product_name,
+    CAST(NULL AS STRING)             AS ref_col,          -- siempre blank
+    unit_weight,
+    product_form,
+    fob_or_dlv,
+    price_change,
+    single_unit_list_price,
+    full_pallet_list_price,
+    CAST(NULL AS DOUBLE)             AS pkg_bulk_discount, -- leave-blank
+    best_net_list_price,
+    species,
+    plant_location,
+    date_inserted
 FROM   vw_comp_price_horizontal_norm;
+
+------------------------------------------------------------------------
+
+SELECT COUNT(*) FROM comp_price_grid_dummy;
+------------------------------------------------------------------------
+
+INSERT INTO comp_price_grid
+          (product_number, formula_code, product_name, ref_col,
+           unit_weight, product_form, fob_or_dlv, price_change,
+           single_unit_list_price, full_pallet_list_price,
+           pkg_bulk_discount,      best_net_list_price,
+           species, plant_location, date_inserted)
+SELECT
+    product_number,
+    formula_code,
+    product_name,
+    CAST(NULL AS STRING)             AS ref_col,
+    unit_weight,
+    product_form,
+    fob_or_dlv,
+    price_change,
+    single_unit_list_price,
+    full_pallet_list_price,
+    CAST(NULL AS DOUBLE)             AS pkg_bulk_discount,
+    best_net_list_price,
+    species,
+    plant_location,
+    date_inserted
+FROM   vw_comp_price_horizontal_norm;
+------------------------------------------------------------------------
+
+INVALIDATE METADATA comp_price_grid;
+COMPUTE STATS comp_price_grid;
+
+------------------------------------------------------------------------
+
+TRUNCATE TABLE comp_price_grid;
+INSERT INTO comp_price_grid
+SELECT * FROM comp_price_grid_bkp_20250425;
+INVALIDATE METADATA comp_price_grid;
