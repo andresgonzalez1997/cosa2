@@ -40,4 +40,3 @@ SELECT
     date_inserted,
     source
 FROM   vw_comp_price_horizontal_norm;
-
