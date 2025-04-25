@@ -1,1 +1,1 @@
-AnalysisException: Unable to infer the column type for column 'pallet_quantity'. Use cast() to explicitly specify the column type for column 'pallet_quantity'.
+ParseException: Syntax error in line 34:undefined: MERGE INTO comp_price_grid A... ^ Encountered: A reserved word cannot be used as an identifier: MERGE Expected: ALTER, COMMENT, COMPUTE, COPY, CREATE, DELETE, DESCRIBE, DROP, EXPLAIN, GRANT, INSERT, INVALIDATE, LOAD, REFRESH, REVOKE, SELECT, SET, SHOW, TRUNCATE, UPDATE, UPSERT, USE, VALUES, WITH CAUSED BY: Exception: Syntax error
