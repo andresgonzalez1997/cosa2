@@ -1,1 +1,1 @@
-ParseException: Syntax error in line 17:undefined: CURRENT_DATE() AS load_dt ^ Encountered: A reserved word cannot be used as an identifier: CURRENT_DATE Expected: CASE, CAST, DEFAULT, EXISTS, FALSE, IF, INTERVAL, LEFT, NOT, NULL, REPLACE, RIGHT, TRUNCATE, TRUE, IDENTIFIER CAUSED BY: Exception: Syntax error
+AnalysisException: Unable to infer the column type for column 'pallet_quantity'. Use cast() to explicitly specify the column type for column 'pallet_quantity'.
