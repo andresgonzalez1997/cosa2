@@ -1,41 +1,95 @@
-import re, datetime as _dt
-from pathlib import Path
-from PyPDF2 import PdfReader
+-- 1-A  Copia 1: respaldo “congelado” para auditoría
+CREATE TABLE comp_price_grid_bkp_20250425 LIKE comp_price_grid;
+INSERT INTO comp_price_grid_bkp_20250425
+SELECT * FROM comp_price_grid;
 
-# ------------------------------------------------------------------
-# FECHA EFECTIVA (única función)
-# ------------------------------------------------------------------
-_DATE_PATTERNS = [
-    re.compile(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*Effective\s+Date', re.I),
-    re.compile(r'Effective\s+Date\s*[-–—]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', re.I),
-]
+-- 1-B  Copia 2: “dummy” sobre la que harás todas las pruebas
+CREATE TABLE comp_price_grid_dummy LIKE comp_price_grid;
+INSERT INTO comp_price_grid_dummy
+SELECT * FROM comp_price_grid;
 
-def extract_effective_date(pdf_path: str | Path) -> _dt.date:
-    """
-    Devuelve la fecha efectiva sin importar si usa '/' o '-' y
-    si el año viene con 2 o 4 dígitos.
-    """
-    reader = PdfReader(str(pdf_path))
-    first_page_text = reader.pages[0].extract_text()
+-------------------------------------------------------------------
+SELECT COUNT(*) FROM comp_price_grid;          -- n_original
+SELECT COUNT(*) FROM comp_price_grid_dummy;    -- debe ser = n_original
 
-    # Busca la primera coincidencia con cualquiera de los dos patrones
-    for rx in _DATE_PATTERNS:
-        m = rx.search(first_page_text)
-        if m:
-            date_str = m.group(1)            # ej. '01-06-2025' o '01/06/25'
+-------------------------------------------------------------------
+CREATE OR REPLACE VIEW vw_comp_price_horizontal_norm AS
+SELECT
+    product_number                           AS product_number,       -- clave
+    formula_code                             AS formula_code,
+    product_desc                             AS product_name,         -- ↔ Product Name
+    unit_weight                              AS unit_weight,
+    NULL                                     AS pallet_quantity,      -- “Not needed” en vertical
+    NULL                                     AS stocking_status,
+    NULL                                     AS min_order_quantity,
+    NULL                                     AS days_lead_time,
+    fob_or_dlv                               AS fob_or_dlv,
+    change_in_price                          AS price_change,
+    list_price                               AS single_unit_list_price,
+    full_pallet_price                        AS full_pallet_list_price,
+    full_load_full_pallet_price              AS pkg_bulk_discount,    -- si aplica
+    full_load_best_price                     AS best_net_price,
+    CURRENT_DATE()                           AS load_dt               -- opcional: trazabilidad
+FROM comp_price_horizontal;
 
-            # Detecta separador               → '/' o '-'
-            sep = "/" if "/" in date_str else "-"
-            mm, dd, yy = date_str.split(sep)
+-------------------------------------------------------------------
+MERGE INTO comp_price_grid_dummy      AS tgt
+USING vw_comp_price_horizontal_norm   AS src
+ON tgt.product_number = src.product_number      --  ➜ clave de emparejamiento
+WHEN MATCHED THEN
+  UPDATE SET
+      tgt.formula_code             = src.formula_code,
+      tgt.product_name             = src.product_name,
+      tgt.unit_weight              = src.unit_weight,
+      tgt.fob_or_dlv               = src.fob_or_dlv,
+      tgt.price_change             = src.price_change,
+      tgt.single_unit_list_price   = src.single_unit_list_price,
+      tgt.full_pallet_list_price   = src.full_pallet_list_price,
+      tgt.pkg_bulk_discount        = src.pkg_bulk_discount,
+      tgt.best_net_price           = src.best_net_price,
+      tgt.load_dt                  = src.load_dt
+WHEN NOT MATCHED THEN
+  INSERT VALUES (
+      src.product_number,
+      src.formula_code,
+      src.product_name,
+      src.unit_weight,
+      src.pallet_quantity,
+      src.stocking_status,
+      src.min_order_quantity,
+      src.days_lead_time,
+      src.fob_or_dlv,
+      src.price_change,
+      src.single_unit_list_price,
+      src.full_pallet_list_price,
+      src.pkg_bulk_discount,
+      src.best_net_price,
+      src.load_dt
+  );
 
-            # Normaliza año de 2 dígitos → 4 dígitos (20yy)
-            if len(yy) == 2:
-                yy = "20" + yy
+-------------------------------------------------------------------
+-- Cuántas filas nuevas / actualizadas
+SELECT
+  COUNT(*)                        AS total_filas_dummy,
+  SUM(CASE WHEN load_dt = CURRENT_DATE() THEN 1 END) AS filas_nuevas_hoy
+FROM comp_price_grid_dummy;
 
-            # Arma de nuevo y convierte a date
-            return _dt.datetime.strptime(
-                f"{mm}{sep}{dd}{sep}{yy}", f"%m{sep}%d{sep}%Y"
-            ).date()
+-- Sube estadísticas para que Tableau las vea enseguida
+INVALIDATE METADATA comp_price_grid_dummy;
+COMPUTE STATS comp_price_grid_dummy;
 
-    # Si llega aquí, no encontró la fecha
-    raise ValueError("No se encontró la fecha efectiva en el PDF.")
+-------------------------------------------------------------------
+CREATE TABLE comp_price_grid_bkp_premerge_20250425 LIKE comp_price_grid;
+INSERT INTO comp_price_grid_bkp_premerge_20250425
+SELECT * FROM comp_price_grid;
+
+-------------------------------------------------------------------
+INVALIDATE METADATA comp_price_grid;
+COMPUTE STATS comp_price_grid;
+-------------------------------------------------------------------
+TRUNCATE TABLE comp_price_grid;                 -- vacía la tabla dañada
+INSERT INTO comp_price_grid
+SELECT * FROM comp_price_grid_bkp_premerge_20250425;
+INVALIDATE METADATA comp_price_grid;
+
+-------------------------------------------------------------------
