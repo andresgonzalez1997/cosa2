@@ -1,1 +1,1 @@
-ParseException: Syntax error in line 34:undefined: MERGE INTO comp_price_grid A... ^ Encountered: A reserved word cannot be used as an identifier: MERGE Expected: ALTER, COMMENT, COMPUTE, COPY, CREATE, DELETE, DESCRIBE, DROP, EXPLAIN, GRANT, INSERT, INVALIDATE, LOAD, REFRESH, REVOKE, SELECT, SET, SHOW, TRUNCATE, UPDATE, UPSERT, USE, VALUES, WITH CAUSED BY: Exception: Syntax error
+impalad version 3.2.0-cdh6.3.3 RELEASE (build 620e74673507eaacb87504479b18911fd2e3344b) Built on Mon Nov  8 13:50:46 PST 2021
