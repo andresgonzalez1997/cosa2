@@ -1,19 +1,22 @@
 CREATE OR REPLACE VIEW vw_comp_price_horizontal_norm AS
 SELECT
-    product_number,
-    formula_code,
-    product_name,
-    product_form,                  -- existe en horizontal
-    unit_weight,
-    fob_or_dlv,
-    price_change,
-    list_price                     AS single_unit_list_price,
-    full_pallet_price              AS full_pallet_list_price,
-    full_load_best_price           AS best_net_list_price,
-    species,                       -- deja NULL si tu tabla no lo trae
-    plant_location,
-    date_inserted
-FROM   comp_price_horizontal_files;   -- ← tu tabla original
+  product_number,                                      -- 1. product_number
+  formula_code,                                        -- 2. formula_code
+  product_name,                                        -- 3. product_name
+  CAST(NULL AS STRING)           AS ref_col,           -- 4. ref_col (Leave blank)
+  unit_weight,                                         -- 5. unit_weight
+  product_form,                                        -- 6. product_form
+  fob_or_dlv,                                          -- 7. fob_or_dlv
+  price_change,                                        -- 8. price_change
+  list_price                     AS single_unit_list_price,   -- 9. single_unit_list_price
+  full_pallet_price              AS full_pallet_list_price,   -- 10. full_pallet_list_price
+  CAST(NULL AS DOUBLE)           AS pkg_bulk_discount,        -- 11. pkg_bulk_discount (Not needed)
+  full_load_best_price           AS best_net_list_price,       -- 12. best_net_list_price
+  CAST(NULL AS STRING)           AS species,                  -- 13. species (Not needed)
+  plant_location,                                      -- 14. plant_location
+  date_inserted                                        -- 15. date_inserted
+FROM comp_price_horizontal_files;
+
 ------------------------------------------------------------------------
 
 INSERT INTO comp_price_grid_dummy
