@@ -1,41 +1,51 @@
-# ------------------- extract_plant_location.py -------------------
+import re
+import tabula
 from pathlib import Path
-from typing import Optional
-import unicodedata, re
-from PyPDF2 import PdfReader
 
-# 1) Normalizar TODOS los guiones raros a "-"
-_DASH_MAP = str.maketrans({c: "-" for c in "-‐-‒–—\u2010\u2011\u2012"})
-
-def _norm(text: str) -> str:
-    return unicodedata.normalize("NFKD", text).translate(_DASH_MAP)
-
-# 2) Regex:
-#    1244-STATESVILLE NC WHS
-#    ---- guion normalizado  --------  --  ---resto opcional---
-_PLANT_RX = re.compile(
-    r"\d{3,4}-\s*([A-Za-z][A-Za-z &.\-]+?)\s+([A-Z]{2})(?:\s+[A-Z]{2,})?\b",
-    re.I,
-)
-
-def extract_plant_location(pdf_path: str | Path) -> str:
+def extract_plant_location_horizontal(pdf_path: str | Path) -> str:
     """
-    Devuelve «PLANTA XX» en MAYÚSCULAS.
-    Si no la encuentra → 'PLANTA DESCONOCIDA' (nunca NaN).
+    Extrae «PLANTA XX» de la cabecera de un PDF *horizontal*.
+
+    Requisitos cumplidos
+    --------------------
+    1.  El rectángulo se pasa directo al parámetro `area`
+        (no queda como constante global).
+    2.  El resultado se devuelve SIEMPRE en MAYÚSCULAS.
+    3.  Devuelve exactamente:  <nombre-planta> + espacio + <dos-letras-estado>
+        (ej. "STATESVILLE NC").  
+        Si no hay coincidencia → "PLANTA DESCONOCIDA".
+
+    Notas
+    -----
+    * Área calculada con Acrobat para tu layout horizontal:
+      [y1, x1, y2, x2] → [0, 650, 60, 1000].
+    * No usa heurísticas (`guess=False`, `lattice=False`) para mayor
+      precisión.
     """
     try:
-        text = PdfReader(str(pdf_path)).pages[0].extract_text() or ""
-        text = _norm(text)
+        # 1. Leer sólo la franja donde está la línea 1244-STATESVILLE NC WHS
+        tables = tabula.read_pdf(
+            pdf_path,
+            pages=1,
+            area=[0, 650, 60, 1000],          # ← coordenadas embebidas
+            lattice=False,
+            guess=False,
+            pandas_options={"header": None, "dtype": str},
+        )
 
-        # DEBUG opcional: imprime las primeras líneas para verificar
-        # print("⟨HEAD⟩", *text.splitlines()[:6], sep="\n")
+        if not tables:
+            return "PLANTA DESCONOCIDA"
 
-        m = _PLANT_RX.search(text)
+        # 2. Combinar toda la franja en un único string
+        text = " ".join(tables[0].fillna("").values.flatten())
+
+        # 3. Regex: guion + nombre + espacio + dos letras de estado
+        m = re.search(r"-\s*([A-Za-z &.\-]+?)\s+([A-Za-z]{2})\b", text)
         if m:
-            plant, state = m.group(1), m.group(2)
+            plant, state = m.groups()
             return f"{plant.strip().upper()} {state.upper()}"
 
         return "PLANTA DESCONOCIDA"
-    except Exception as e:
-        print("[extract_plant_location] error:", e)
+
+    except Exception:
         return "PLANTA DESCONOCIDA"
