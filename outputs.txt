@@ -1,84 +1,39 @@
-CREATE OR REPLACE VIEW vw_comp_price_horizontal_norm AS
-SELECT
-  product_number,                                      -- 1. product_number
-  formula_code,                                        -- 2. formula_code
-  product_name,                                        -- 3. product_name
-  CAST(NULL AS STRING)           AS ref_col,           -- 4. ref_col (Leave blank)
-  unit_weight,                                         -- 5. unit_weight
-  product_form,                                        -- 6. product_form
-  fob_or_dlv,                                          -- 7. fob_or_dlv
-  price_change,                                        -- 8. price_change
-  list_price                     AS single_unit_list_price,   -- 9. single_unit_list_price
-  full_pallet_price              AS full_pallet_list_price,   -- 10. full_pallet_list_price
-  CAST(NULL AS DOUBLE)           AS pkg_bulk_discount,        -- 11. pkg_bulk_discount (Not needed)
-  full_load_best_price           AS best_net_list_price,       -- 12. best_net_list_price
-  CAST(NULL AS STRING)           AS species,                  -- 13. species (Not needed)
-  plant_location,                                      -- 14. plant_location
-  date_inserted                                        -- 15. date_inserted
-FROM comp_price_horizontal_files;
+# ------------------------------------------------------------------ #
+#  ▸  EXTRACT_PLANT_LOCATION                                         #
+# ------------------------------------------------------------------ #
+import tabula, re
+from pathlib import Path
+from typing import Optional
 
-------------------------------------------------------------------------
+# Regex: 4 ó 3 dígitos – planta – espacio – 2 letras (código estado)
+_PLANT_RX = re.compile(r"\d{3,4}-([A-Za-z ]+?)\s+([A-Za-z]{2})\b")
 
-INSERT INTO comp_price_grid_dummy
-          (product_number, formula_code, product_name, ref_col,
-           unit_weight, product_form, fob_or_dlv, price_change,
-           single_unit_list_price, full_pallet_list_price,
-           pkg_bulk_discount,      best_net_list_price,
-           species, plant_location, date_inserted)
-SELECT
-    product_number,
-    formula_code,
-    product_name,
-    CAST(NULL AS STRING)             AS ref_col,          -- siempre blank
-    unit_weight,
-    product_form,
-    fob_or_dlv,
-    price_change,
-    single_unit_list_price,
-    full_pallet_list_price,
-    CAST(NULL AS DOUBLE)             AS pkg_bulk_discount, -- leave-blank
-    best_net_list_price,
-    species,
-    plant_location,
-    date_inserted
-FROM   vw_comp_price_horizontal_norm;
+def extract_plant_location(file_path: str | Path) -> Optional[str]:
+    """
+    Lee la franja superior derecha de la 1.ª página y devuelve
+    «PLANTA XX» en MAYÚSCULAS (ej.: STATESVILLE NC).
+    Si no la encuentra, devuelve None (para que el DF reciba NaN).
+    """
+    try:
+        tables = tabula.read_pdf(
+            file_path,
+            pages=1,
+            area=[0, 500, 40, 800],    # ← mismo rectángulo que usabas
+            lattice=False,
+            guess=False,
+            pandas_options={"header": None, "dtype": str},
+        )
+        if not tables:
+            return None
 
-------------------------------------------------------------------------
+        # Convertimos la tablita a texto continuo
+        text = " ".join(tables[0].fillna("").values.flatten())
 
-SELECT COUNT(*) FROM comp_price_grid_dummy;
-------------------------------------------------------------------------
+        m = _PLANT_RX.search(text)
+        if m:
+            plant, state = m.group(1), m.group(2)
+            return f"{plant.strip().upper()} {state.upper()}"
 
-INSERT INTO comp_price_grid
-          (product_number, formula_code, product_name, ref_col,
-           unit_weight, product_form, fob_or_dlv, price_change,
-           single_unit_list_price, full_pallet_list_price,
-           pkg_bulk_discount,      best_net_list_price,
-           species, plant_location, date_inserted)
-SELECT
-    product_number,
-    formula_code,
-    product_name,
-    CAST(NULL AS STRING)             AS ref_col,
-    unit_weight,
-    product_form,
-    fob_or_dlv,
-    price_change,
-    single_unit_list_price,
-    full_pallet_list_price,
-    CAST(NULL AS DOUBLE)             AS pkg_bulk_discount,
-    best_net_list_price,
-    species,
-    plant_location,
-    date_inserted
-FROM   vw_comp_price_horizontal_norm;
-------------------------------------------------------------------------
-
-INVALIDATE METADATA comp_price_grid;
-COMPUTE STATS comp_price_grid;
-
-------------------------------------------------------------------------
-
-TRUNCATE TABLE comp_price_grid;
-INSERT INTO comp_price_grid
-SELECT * FROM comp_price_grid_bkp_20250425;
-INVALIDATE METADATA comp_price_grid;
+        return None
+    except Exception:
+        return None
