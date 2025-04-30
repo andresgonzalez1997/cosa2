@@ -1,35 +1,55 @@
-# ------------------------------------------------------------------ #
-# ▸  EXTRACT_PLANT_LOCATION  (no usa Tabula)                         #
-# ------------------------------------------------------------------ #
-# -------------------------------------------------------------- #
-#  ▸  EXTRACT_PLANT_LOCATION  – final                            #
-# -------------------------------------------------------------- #
-import re, unicodedata
+# ---------------- extract_plant_location.py ----------------
 from pathlib import Path
 from typing import Optional
+import unicodedata, re
 from PyPDF2 import PdfReader
 
-# acepta -, –, —, -  → clase de dashes
-_PLANT_RX = re.compile(r"\d{3,4}[-\-\u2013\u2014]\s*([A-Za-z &.\-]+?)\s+([A-Z]{2})\b", re.I)
 
-_DASHES = str.maketrans({c: "-" for c in "-–—"})   # mapear todos a "-"
+# 1) Normalizar TODOS los dashes/hyphens Unicode a "-"
+_DASHES = dict.fromkeys(
+    [  # todos los de categoría "Pd" + NBHY
+        *range(0x2010, 0x2017),   # ‐-‒–—―
+        0x2212,                   # −
+        0x2043,                   # ⁃
+        0xFE63, 0xFF0D,           # ﹣ －
+        0x2011, 0x2012            # - ‒ (non-breaking / figure)
+    ],
+    ord("-"),
+)
 
-def extract_plant_location(file_path: str | Path) -> str:
+def _normalize(text: str) -> str:
+    text = unicodedata.normalize("NFKD", text)
+    return text.translate(_DASHES)
+
+
+# 2) Regex – 4 dígitos, guion, planta, 2 letras estado
+_PLANT_RX = re.compile(
+    r"\d{3,4}-\s*([A-Z][A-Z &.\-]+?)\s+([A-Z]{2})\b",
+    re.I,
+)
+
+def extract_plant_location(pdf_path: str | Path) -> str:
     """
-    • Devuelve «PLANTA XX» en MAYÚSCULAS.
-    • Si no la encuentra → 'SIN PLANTA' (nunca NaN).
+    Devuelve «PLANTA XX» en MAYÚSCULAS.
+    Si no la encuentra → 'PLANTA DESCONOCIDA' (nunca NaN).
     """
     try:
-        reader = PdfReader(str(file_path))
-        text = reader.pages[0].extract_text() or ""
-
-        # normaliza dashes y caracteres raros a ASCII
-        text = unicodedata.normalize("NFKD", text).translate(_DASHES)
+        text = PdfReader(str(pdf_path)).pages[0].extract_text() or ""
+        text = _normalize(text)
 
         m = _PLANT_RX.search(text)
         if m:
-            return f"{m.group(1).strip().upper()} {m.group(2).upper()}"
+            plant, state = m.groups()
+            return f"{plant.strip().upper()} {state.upper()}"
 
-        return "SIN PLANTA"
-    except Exception:
-        return "SIN PLANTA"
+        # fallback: escanea las 5 primeras líneas por “PLANTA XX”
+        for line in text.splitlines()[:5]:
+            parts = line.strip().rsplit(" ", 2)
+            if len(parts) >= 2 and len(parts[-1]) == 2:
+                return f"{' '.join(parts[-2: -1]).upper()} {parts[-1].upper()}"
+
+        return "PLANTA DESCONOCIDA"
+
+    except Exception as e:
+        print("[extract_plant_location] error:", e)
+        return "PLANTA DESCONOCIDA"
