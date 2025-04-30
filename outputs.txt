@@ -1,51 +1,28 @@
-import re
-import tabula
-from pathlib import Path
+-- 1.Ranking Measure
+M_Rank =
+RANKX (
+    ALLSELECTED ( Struct_MatMst[PROD_DESC] ),   -- ignora sólo el filtro visual,
+    [TT Mrgn],                                  -- mide el margen
+    ,
+    DESC,
+    DENSE
+)
 
-def extract_plant_location_horizontal(pdf_path: str | Path) -> str:
-    """
-    Extrae «PLANTA XX» de la cabecera de un PDF *horizontal*.
+-- 2. Running Total acumulado por ese ranking
+M_Running Total =
+VAR _CurrentRank = [M_Rank]          -- capturamos el rango del punto actual
+RETURN
+CALCULATE (
+    [TT Mrgn],                       -- métrica que estamos acumulando
+    FILTER (
+        ALL ( Struct_MatMst[PROD_DESC] ),   -- quita filtros de producto
+        [M_Rank] <= _CurrentRank            -- conserva los de rango menor-igual
+    )
+)
 
-    Requisitos cumplidos
-    --------------------
-    1.  El rectángulo se pasa directo al parámetro `area`
-        (no queda como constante global).
-    2.  El resultado se devuelve SIEMPRE en MAYÚSCULAS.
-    3.  Devuelve exactamente:  <nombre-planta> + espacio + <dos-letras-estado>
-        (ej. "STATESVILLE NC").  
-        Si no hay coincidencia → "PLANTA DESCONOCIDA".
-
-    Notas
-    -----
-    * Área calculada con Acrobat para tu layout horizontal:
-      [y1, x1, y2, x2] → [0, 650, 60, 1000].
-    * No usa heurísticas (`guess=False`, `lattice=False`) para mayor
-      precisión.
-    """
-    try:
-        # 1. Leer sólo la franja donde está la línea 1244-STATESVILLE NC WHS
-        tables = tabula.read_pdf(
-            pdf_path,
-            pages=1,
-            area=[0, 650, 60, 1000],          # ← coordenadas embebidas
-            lattice=False,
-            guess=False,
-            pandas_options={"header": None, "dtype": str},
-        )
-
-        if not tables:
-            return "PLANTA DESCONOCIDA"
-
-        # 2. Combinar toda la franja en un único string
-        text = " ".join(tables[0].fillna("").values.flatten())
-
-        # 3. Regex: guion + nombre + espacio + dos letras de estado
-        m = re.search(r"-\s*([A-Za-z &.\-]+?)\s+([A-Za-z]{2})\b", text)
-        if m:
-            plant, state = m.groups()
-            return f"{plant.strip().upper()} {state.upper()}"
-
-        return "PLANTA DESCONOCIDA"
-
-    except Exception:
-        return "PLANTA DESCONOCIDA"
+--3. % acumulado (opcional para Pareto)
+M_Cumulative % =
+DIVIDE (
+    [M_Running Total],
+    CALCULATE ( [TT Mrgn], ALL ( Struct_MatMst[PROD_DESC] ) )
+)
