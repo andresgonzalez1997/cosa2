@@ -1,30 +1,20 @@
-# ---------------- extract_plant_location.py ----------------
+# ------------------- extract_plant_location.py -------------------
 from pathlib import Path
 from typing import Optional
 import unicodedata, re
 from PyPDF2 import PdfReader
 
+# 1) Normalizar TODOS los guiones raros a "-"
+_DASH_MAP = str.maketrans({c: "-" for c in "-‐-‒–—\u2010\u2011\u2012"})
 
-# 1) Normalizar TODOS los dashes/hyphens Unicode a "-"
-_DASHES = dict.fromkeys(
-    [  # todos los de categoría "Pd" + NBHY
-        *range(0x2010, 0x2017),   # ‐-‒–—―
-        0x2212,                   # −
-        0x2043,                   # ⁃
-        0xFE63, 0xFF0D,           # ﹣ －
-        0x2011, 0x2012            # - ‒ (non-breaking / figure)
-    ],
-    ord("-"),
-)
+def _norm(text: str) -> str:
+    return unicodedata.normalize("NFKD", text).translate(_DASH_MAP)
 
-def _normalize(text: str) -> str:
-    text = unicodedata.normalize("NFKD", text)
-    return text.translate(_DASHES)
-
-
-# 2) Regex – 4 dígitos, guion, planta, 2 letras estado
+# 2) Regex:
+#    1244-STATESVILLE NC WHS
+#    ---- guion normalizado  --------  --  ---resto opcional---
 _PLANT_RX = re.compile(
-    r"\d{3,4}-\s*([A-Z][A-Z &.\-]+?)\s+([A-Z]{2})\b",
+    r"\d{3,4}-\s*([A-Za-z][A-Za-z &.\-]+?)\s+([A-Z]{2})(?:\s+[A-Z]{2,})?\b",
     re.I,
 )
 
@@ -35,21 +25,17 @@ def extract_plant_location(pdf_path: str | Path) -> str:
     """
     try:
         text = PdfReader(str(pdf_path)).pages[0].extract_text() or ""
-        text = _normalize(text)
+        text = _norm(text)
+
+        # DEBUG opcional: imprime las primeras líneas para verificar
+        # print("⟨HEAD⟩", *text.splitlines()[:6], sep="\n")
 
         m = _PLANT_RX.search(text)
         if m:
-            plant, state = m.groups()
+            plant, state = m.group(1), m.group(2)
             return f"{plant.strip().upper()} {state.upper()}"
 
-        # fallback: escanea las 5 primeras líneas por “PLANTA XX”
-        for line in text.splitlines()[:5]:
-            parts = line.strip().rsplit(" ", 2)
-            if len(parts) >= 2 and len(parts[-1]) == 2:
-                return f"{' '.join(parts[-2: -1]).upper()} {parts[-1].upper()}"
-
         return "PLANTA DESCONOCIDA"
-
     except Exception as e:
         print("[extract_plant_location] error:", e)
         return "PLANTA DESCONOCIDA"
