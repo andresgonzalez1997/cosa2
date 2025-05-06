@@ -1,3 +1,40 @@
+
+import re          # ⬅︎ ya lo usas arriba, si no está importa aquí
+
+def add_species_column(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Detecta filas de categoría (species) en la primera columna
+    y propaga ese valor al resto de filas de datos.
+    
+    ▸ La columna 0 es `product_number` luego de `_standardize`.
+    ▸ Cuando la celda **no** inicia con dígito, se asume que es
+      la categoría/species → se guarda y se elimina la fila.
+    """
+    # Asegúrate de que la columna exista
+    if "product_number" not in df.columns:
+        return df
+
+    df["species"] = None
+    current_species = None
+    drop_idx = []
+
+    for idx, value in df["product_number"].items():
+        if pd.isna(value):
+            continue
+
+        value_str = str(value).strip()
+        if value_str and not value_str[0].isdigit():
+            # Ej. "DOG FOOD" –> "DOG FOOD"
+            current_species = re.sub(r",", "", value_str).upper()
+            drop_idx.append(idx)
+        else:
+            df.at[idx, "species"] = current_species
+
+    df.drop(index=drop_idx, inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    return df
+
+--------------------------------------------------------------------------------------------------------------------------------------------
 def read_file(pdf: str | pathlib.Path) -> pd.DataFrame:
     # … (pasos anteriores sin tocar)
 
