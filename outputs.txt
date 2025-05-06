@@ -1,47 +1,22 @@
-# --------------------------------------------------------------------------- #
-# 6. Normalización de cada tabla  ―  ¡VERSIÓN FINAL!                          #
-# --------------------------------------------------------------------------- #
-def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """
-    ▸ Devuelve cada tabla con exactamente 16 columnas estándar (COLUMN_NAMES)
-      + opcionalmente la auxiliar '__raw_species' (17ª), usada luego
-      por add_species_column.
-    ▸ Acepta tablas entre 14 y 18 columnas producidas por Tabula.
-    """
-    n = tbl.shape[1]
+[1/1] Procesando: 2025.03.03 Statesville.pdf
+Got stderr: May 06, 2025 8:22:08 AM org.apache.pdfbox.pdmodel.font.PDTrueTypeFont <init>
+WARNING: Using fallback font 'LiberationSans' for 'ArialMT'
 
-    # ── 0) Si es demasiado corta (<14), descártala.
-    if n < 14:
-        return None
+Got stderr: May 06, 2025 8:22:12 AM org.apache.pdfbox.pdmodel.font.PDTrueTypeFont <init>
+WARNING: Using fallback font 'LiberationSans' for 'ArialMT'
 
-    extra_cols: List[str] = []      # aquí guardaremos '__raw_species' si aparece
+[DEBUG] Columnas del DF tras parsear:
+ ['product_number', 'formula_code', 'product_name', 'product_form', 'unit_weight', 'pallet_quantity', 'stocking_status', 'min_order_quantity', 'days_lead_time', 'fob_or_dlv', 'price_change', 'list_price', 'full_pallet_price', 'half_load_full_pallet_price', 'full_load_full_pallet_price', 'full_load_best_price', 'plant_location', 'date_inserted', 'source', 'species']
+Empty DataFrame
+Columns: [product_number, formula_code, product_name, product_form, unit_weight, pallet_quantity, stocking_status, min_order_quantity, days_lead_time, fob_or_dlv, price_change, list_price, full_pallet_price, half_load_full_pallet_price, full_load_full_pallet_price, full_load_best_price, plant_location, date_inserted, source, species]
+Index: []
+[DEBUG] Columnas tras set_column_types:
+ ['product_number', 'formula_code', 'product_name', 'product_form', 'unit_weight', 'pallet_quantity', 'stocking_status', 'min_order_quantity', 'days_lead_time', 'fob_or_dlv', 'price_change', 'list_price', 'full_pallet_price', 'half_load_full_pallet_price', 'full_load_full_pallet_price', 'full_load_best_price', 'plant_location', 'date_inserted', 'source', 'species']
+[INFO] DataFrame shape: (0, 20)
+Empty DataFrame
+Columns: [product_number, formula_code, product_name, product_form, unit_weight, pallet_quantity, stocking_status, min_order_quantity, days_lead_time, fob_or_dlv, price_change, list_price, full_pallet_price, half_load_full_pallet_price, full_load_full_pallet_price, full_load_best_price, plant_location, date_inserted, source, species]
+Index: []
+[INFO] DF vacío, no se suben datos.
+[INFO] Archivo '2025.03.03 Statesville.pdf' eliminado de SharePoint.
 
-    # ── 1) Tablas LARGAS (≥17) ─────────────────────────────────────────────
-    if n >= 17:
-        first, second = tbl.iloc[:, 0], tbl.iloc[:, 1]
-        second_is_numeric = second.astype(str).str[0].str.isdigit().mean() > 0.5
-
-        if second_is_numeric:
-            species_hint = first.copy()          # columna-categoría
-            tbl = tbl.iloc[:, 1:17].copy()       # recorta a 16
-            tbl["__raw_species"] = species_hint  # ← 17ª columna
-            extra_cols.append("__raw_species")
-        else:
-            tbl = tbl.iloc[:, :16].copy()
-
-    # ── 2) Tablas MEDIAS (15-16) → rellena pads hasta 16 ───────────────────
-    elif n in (15, 16):
-        while tbl.shape[1] < 16:
-            tbl[f"__pad_{tbl.shape[1]}"] = None
-        tbl = tbl.iloc[:, :16].copy()
-
-    # ── 3) Tablas de 14 columnas → añade dos pads ──────────────────────────
-    elif n == 14:
-        tbl["__pad_a"] = None
-        tbl["__pad_b"] = None
-        tbl = tbl.iloc[:, :16].copy()
-
-    # ── 4) Etiquetado final de columnas ────────────────────────────────────
-    tbl.columns = COLUMN_NAMES + extra_cols   # 16 ó 17 nombres, según el caso
-
-    return tbl
+[INFO] Proceso completado para todos los PDFs.
