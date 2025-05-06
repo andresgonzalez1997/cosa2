@@ -1,16 +1,30 @@
-def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """Recorta a 16 columnas y corrige desplazamientos (17 columnas)."""
-    # Demasiado corta → descartar.
-    if tbl.shape[1] < 16:
-        return None
+def add_species_column(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Extrae la categoría (species) aun cuando la columna product_number
+    esté vacía por el recorte de columnas. Se toma el primer valor no nulo
+    de la fila. Esa fila se descarta y la categoría se propaga.
+    """
+    df["species"] = None
+    current_species = None
+    drop_idx = []
 
-    # Caso habitual de desplazamiento: 17 columnas (primera = categoría)
-    if tbl.shape[1] >= 17:
-        first, second = tbl.iloc[:, 0], tbl.iloc[:, 1]
-        numeric_like = second.astype(str).str[0].str.isdigit().mean() > 0.5
-        tbl = tbl.iloc[:, 1:17] if numeric_like else tbl.iloc[:, :16]
-    else:
-        tbl = tbl.iloc[:, :16]
+    for idx, row in df.iterrows():
+        #–––– 1) Determina si la fila es categoría
+        pn = str(row["product_number"]).strip() if pd.notna(row["product_number"]) else ""
+        is_category_row = pn == "" or (pn and not pn[0].isdigit())
 
-    tbl.columns = COLUMN_NAMES
-    return tbl
+        if is_category_row:
+            #–––– 2) Captura el primer valor de texto de la fila
+            # (en la práctica suele estar en formula_code o product_name)
+            for val in row:
+                if pd.notna(val) and str(val).strip():
+                    current_species = re.sub(r",", "", str(val)).upper()
+                    break
+            drop_idx.append(idx)
+        else:
+            df.at[idx, "species"] = current_species
+
+    # Limpia las filas-categoría ya identificadas
+    df.drop(index=drop_idx, inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    return df
