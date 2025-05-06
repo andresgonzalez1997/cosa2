@@ -1,23 +1,52 @@
 def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
-    cols = tbl.shape[1]
+    """
+    • Devuelve cada tabla con exactamente las 16 columnas estándar
+      definidas en COLUMN_NAMES.
+    • En tablas de 17-18 columnas: recorta la categoría/species
+      y la guarda en '__raw_species'.
+    • En tablas de 14-15 columnas: rellena columnas vacías al final
+      hasta llegar a 16.
+    • Si la tabla tiene menos de 14 columnas, se considera irreparable
+      y se descarta (return None).
+    """
+    n_cols = tbl.shape[1]
 
-    # ── 1) Muy corta (<12)  → descarta
-    if cols < 12:
-        return None
+    # ── 0. Demasiado corta: descartar directamente ────────────────
+    if n_cols < 14:
+        return None    # ‹ tabla inútil ›
 
-    # ── 2) Ajusta tabla larga (≥17)  → lógica anterior …
-    #      ↓↓↓ (no la toco aquí) ↓↓↓
-    if cols >= 17:
-        # (tu código de antes con __raw_species)
-        ...
+    # ── 1. Tablas LARGAS (≥17)  → recortar & capturar categoría ──
+    if n_cols >= 17:
+        first_col, second_col = tbl.iloc[:, 0], tbl.iloc[:, 1]
+        second_is_numeric = second_col.astype(str).str[0].str.isdigit().mean() > 0.5
 
-    # ── 3) Tabla de 15-16 columnas  → Rellenar
-    if cols in (15, 16):
-        # Añade columnas vacías hasta 16
-        for _ in range(16 - cols):
-            tbl[f"__pad_{_}"] = None
-        tbl = tbl.iloc[:, :16]
+        # Caso típico: 1.ª = categoría, 2.ª = product_number numérico
+        if second_is_numeric:
+            species_hint = first_col.copy()
+            tbl = tbl.iloc[:, 1:17].copy()         # queda en 16
+            tbl["__raw_species"] = species_hint    # columna auxiliar
 
-    # Por último, renombra columnas estándar
-    tbl.columns = COLUMN_NAMES
+        # Caso rarísimo: la categoría NO está en la 1.ª columna
+        else:
+            tbl = tbl.iloc[:, :16].copy()
+
+    # ── 2. Tablas MEDIAS (15-16 columnas)  → rellenar si falta algo ─
+    elif n_cols in (15, 16):
+        # A veces la categoría ya está cortada: la primera columna
+        # sigue siendo product_number, así que no necesitamos species_hint.
+        # Simplemente completamos con columnas vacías al final.
+        for i in range(16 - n_cols):
+            tbl[f"__pad_{i}"] = None
+        tbl = tbl.iloc[:, :16].copy()
+
+    # ── 3. Tablas con 14 columnas  → relleno doble ───────────────
+    elif n_cols == 14:
+        # Añade dos columnas vacías para llegar a 16
+        tbl["__pad_a"] = None
+        tbl["__pad_b"] = None
+        tbl = tbl.iloc[:, :16].copy()
+
+    # ── 4. Etiqueta las 16 columnas finales ───────────────────────
+    tbl.columns = COLUMN_NAMES   # orden estándar
+
     return tbl
