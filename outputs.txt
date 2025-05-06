@@ -1,23 +1,30 @@
-def _is_header_row(row: pd.Series) -> bool:
-    combined = " ".join(row.astype(str)).upper()
+def add_species_column(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Extrae la categoría (species) aun cuando la columna product_number
+    esté vacía por el recorte de columnas. Se toma el primer valor no nulo
+    de la fila. Esa fila se descarta y la categoría se propaga.
+    """
+    df["species"] = None
+    current_species = None
+    drop_idx = []
 
-    if _PRICE_RE.search(combined):
-        return True
+    for idx, row in df.iterrows():
+        #–––– 1) Determina si la fila es categoría
+        pn = str(row["product_number"]).strip() if pd.notna(row["product_number"]) else ""
+        is_category_row = pn == "" or (pn and not pn[0].isdigit())
 
-    first = str(row.iloc[0]).strip().upper()
+        if is_category_row:
+            #–––– 2) Captura el primer valor de texto de la fila
+            # (en la práctica suele estar en formula_code o product_name)
+            for val in row:
+                if pd.notna(val) and str(val).strip():
+                    current_species = re.sub(r",", "", str(val)).upper()
+                    break
+            drop_idx.append(idx)
+        else:
+            df.at[idx, "species"] = current_species
 
-    # ⚡ Cabeceras tipo "FORMULA CODE / PRODUCT DESC"
-    if "FORMULA" in combined and "PRODUCT" in combined:
-        return True
-
-    if first and first[0].isdigit():
-        return False
-
-    if first.startswith("PRODUCT") and str(row.iloc[1]).upper().startswith("FORMULA"):
-        return True
-
-    if pd.isna(row["list_price"]):
-        if any(tok in combined for tok in HEADER_TOKENS):
-            return True
-
-    return False
+    # Limpia las filas-categoría ya identificadas
+    df.drop(index=drop_idx, inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    return df
