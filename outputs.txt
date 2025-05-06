@@ -1,80 +1,23 @@
-def add_species_column(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Propaga la categoría (species).  Usa primero la columna auxiliar
-    '__raw_species'; si no existe, cae al viejo método.
-    """
-    df["species"] = None
-    current = None
-    drop_idx = []
-
-    for idx, row in df.iterrows():
-        # 1) Encuentra el texto de categoría (si lo hay) -------------
-        candidate = None
-
-        # Prioridad 1: columna auxiliar
-        if "__raw_species" in df.columns:
-            candidate = row["__raw_species"]
-
-        # Prioridad 2: product_number (caso sin recorte de columnas)
-        if (candidate is None or str(candidate).strip() == "") and pd.notna(row["product_number"]):
-            candidate = row["product_number"]
-
-        cand_str = str(candidate).strip() if candidate is not None else ""
-
-        # 2) ¿Es una fila-categoría?
-        if cand_str and not cand_str[0].isdigit():
-            current = re.sub(r",", "", cand_str).upper()
-            drop_idx.append(idx)                      # marcar para borrar
-        else:
-            df.at[idx, "species"] = current           # propaga
-
-    # Limpieza final
-    df.drop(index=drop_idx, inplace=True)
-    df.drop(columns="__raw_species", errors="ignore", inplace=True)
-    df.reset_index(drop=True, inplace=True)
-    return df
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
-    if tbl.shape[1] < 16:
+    cols = tbl.shape[1]
+
+    # ── 1) Muy corta (<12)  → descarta
+    if cols < 12:
         return None
 
-    if tbl.shape[1] >= 17:
-        first, second = tbl.iloc[:, 0], tbl.iloc[:, 1]
-        numeric_like = second.astype(str).str[0].str.isdigit().mean() > 0.5
+    # ── 2) Ajusta tabla larga (≥17)  → lógica anterior …
+    #      ↓↓↓ (no la toco aquí) ↓↓↓
+    if cols >= 17:
+        # (tu código de antes con __raw_species)
+        ...
 
-        if numeric_like:
-            species_hint = tbl.iloc[:, 0]           # ← guarda la categoría
-            tbl = tbl.iloc[:, 1:17].copy()          # recorta a 16 cols
-            tbl.columns = COLUMN_NAMES
-            tbl["__raw_species"] = species_hint     # nueva col auxiliar
-        else:
-            tbl = tbl.iloc[:, :16]
-            tbl.columns = COLUMN_NAMES
-    else:
-        tbl.columns = COLUMN_NAMES
+    # ── 3) Tabla de 15-16 columnas  → Rellenar
+    if cols in (15, 16):
+        # Añade columnas vacías hasta 16
+        for _ in range(16 - cols):
+            tbl[f"__pad_{_}"] = None
+        tbl = tbl.iloc[:, :16]
 
+    # Por último, renombra columnas estándar
+    tbl.columns = COLUMN_NAMES
     return tbl
