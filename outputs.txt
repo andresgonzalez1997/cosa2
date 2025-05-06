@@ -1,28 +1,353 @@
--- 1.Ranking Measure
-M_Rank =
-RANKX (
-    ALLSELECTED ( Struct_MatMst[PROD_DESC] ),   -- ignora sólo el filtro visual,
-    [TT Mrgn],                                  -- mide el margen
-    ,
-    DESC,
-    DENSE
+def add_species_column(df):
+    species = None
+    df["species"] = None
+    for index, row in df.iterrows():
+        if re.match("\d", row[0]) is None:
+            species = str(row[0]).replace(",", "").upper()
+            df = df.drop(index, axis=0)
+        else:
+            df.loc[index, "species"] = species
+    
+    df = df.reset_index(drop=True)
+    return df
+///////////////////////////////////////////
+///////////////////////////////////////////
+///////////////////////////////////////////
+///////////////////////////////////////////
+"""
+Lectura y limpieza de PDFs.
+
+• Conservar la primera línea real de datos de cada página.
+• Eliminar cabeceras repetidas ("PRODUCT NUMBER …"), fragmentos ("MIN / DAYS")
+  y textos sueltos como "Price / Unit" o "Price in US Dollars".
+• Corrige números negativos (100‑  →  ‑100) y añadir metadatos (fecha, planta, source)
+• Se usa la función pública: df = read_file("pdf_file") la cual devuelve un DataFrame
+  con 19 columnas estándar, listo para cargar.
+"""
+from __future__ import annotations
+import datetime as _dt
+import pathlib
+import re
+from typing import List, Optional
+from PyPDF2 import PdfReader
+import pandas as pd
+import tabula
+
+# --------------------------------------------------------------------------- #
+# 1. Nombres estándar (16 columnas del PDF original)
+# --------------------------------------------------------------------------- #
+COLUMN_NAMES: List[str] = [
+    "product_number", 
+    "formula_code", 
+    "product_name", 
+    "product_form",
+    "unit_weight", 
+    "pallet_quantity",
+    "stocking_status",
+    "min_order_quantity",
+    "days_lead_time",
+    "fob_or_dlv",
+    "price_change",
+    "list_price",
+    "full_pallet_price",
+    "half_load_full_pallet_price",
+    "full_load_full_pallet_price",
+    "full_load_best_price",
+]
+
+# --------------------------------------------------------------------------- #
+# 2. Columnas numéricas que se convertirán a float (Para evitar errores de tipado)
+# --------------------------------------------------------------------------- #
+# «pallet_quantity», «min_order_quantity» y «days_lead_time» salen como int64;
+# se fuerzan a float evitamos el error de esquema Incompatible Parquet/Impala.
+NUMERIC_COLS: List[str] = [
+    "pallet_quantity", "min_order_quantity", "days_lead_time",
+] + COLUMN_NAMES[10:]  # todas las columnas de precios
+
+# --------------------------------------------------------------------------- #
+# 3. Regex de fecha y planta (metadatos)
+# --------------------------------------------------------------------------- #
+# DATE_RX = re.compile(r"\d{1,2}/\d{1,2}/(?:\d{4}|\d{2})")
+# LOC_RX = re.compile(r"\b(STATESVILLE|HUDSON'S|[A-Z ]+ NC)\b", re.I)
+
+# --------------------------------------------------------------------------- #
+# 4. Utilidades Tabula
+# --------------------------------------------------------------------------- #
+
+def _first_table(pdf: str | pathlib.Path, area) -> str:
+    try:
+        t = tabula.read_pdf(
+            pdf,
+            pages=1,
+            lattice=True,
+            guess=False,
+            area=area,
+            pandas_options={"header": None, "dtype": str},
+        )[0]
+        return " ".join(t.astype(str).values.ravel())
+    except Exception:
+        return ""
+
+
+# ------------------------------------------------------------------
+# FECHA EFECTIVA 
+# ------------------------------------------------------------------
+_DATE_PATTERNS = [
+    re.compile(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*Effective\s+Date', re.I),
+    re.compile(r'Effective\s+Date\s*[-–—]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', re.I),
+]
+
+def extract_effective_date(pdf_path: str | Path) -> _dt.date:
+    """
+    Devuelve la fecha efectiva sin importar si usa '/' o '-' y
+    si el año viene con 2 o 4 dígitos.
+    """
+    reader = PdfReader(str(pdf_path))
+    first_page_text = reader.pages[0].extract_text()
+
+    # Busca la primera coincidencia con cualquiera de los dos patrones
+    for rx in _DATE_PATTERNS:
+        m = rx.search(first_page_text)
+        if m:
+            date_str = m.group(1)            # ej. '01-06-2025' o '01/06/25'
+
+            # Detecta separador               → '/' o '-'
+            sep = "/" if "/" in date_str else "-"
+            mm, dd, yy = date_str.split(sep)
+
+            # Normaliza año de 2 dígitos → 4 dígitos (20yy)
+            if len(yy) == 2:
+                yy = "20" + yy
+
+            # Arma de nuevo y convierte a date
+            return _dt.datetime.strptime(
+                f"{mm}{sep}{dd}{sep}{yy}", f"%m{sep}%d{sep}%Y"
+            ).date()
+
+    # Si llega aquí, no encontró la fecha
+    raise ValueError("No se encontró la fecha efectiva en el PDF.")
+    
+# -------------------------------------------------------------- #
+#  ▸  EXTRACT_PLANT_LOCATION  – final                            #
+# -------------------------------------------------------------- #
+def extract_plant_location(pdf_path: str | Path) -> str:
+    """
+    Extrae «PLANTA XX» de la cabecera de un PDF *horizontal*.
+    """
+    try:
+        # 1. Leer sólo la franja donde está la línea 1244-STATESVILLE NC WHS
+        tables = tabula.read_pdf(
+            pdf_path,
+            pages=1,
+            area=[0, 650, 60, 1000],          # ← coordenadas embebidas
+            lattice=False,
+            guess=False,
+            pandas_options={"header": None, "dtype": str},
+        )
+
+        if not tables:
+            return "PLANTA DESCONOCIDA"
+
+        # 2. Combinar toda la franja en un único string
+        text = " ".join(tables[0].fillna("").values.flatten())
+
+        # 3. Regex: guion + nombre + espacio + dos letras de estado
+        m = re.search(r"-\s*([A-Za-z &.\-]+?)\s+([A-Za-z]{2})\b", text)
+        if m:
+            plant, state = m.groups()
+            return f"{plant.strip().upper()} {state.upper()}"
+
+        return "PLANTA DESCONOCIDA"
+
+    except Exception:
+        return "PLANTA DESCONOCIDA"
+# --------------------------------------------------------------------------- #
+# 5. Lectura de Tablas con Tabula
+# --------------------------------------------------------------------------- #
+def _read_tables(pdf):
+    try:
+        return tabula.read_pdf(
+            pdf,
+            pages="all",
+            lattice=True,
+            guess=False,
+            pandas_options={"dtype": str, "header": None},
+        )
+    except Exception as exc:
+        print("[tabula]", exc)
+        return []
+
+# --------------------------------------------------------------------------- #
+# 6. Normalización de cada tabla
+# --------------------------------------------------------------------------- #
+def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """Recorta a 16 columnas y corrige desplazamientos (17 columnas)."""
+    # Demasiado corta → descartar.
+    if tbl.shape[1] < 16:
+        return None
+
+    # Caso habitual de desplazamiento: 17 columnas (primera = categoría)
+    if tbl.shape[1] >= 17:
+        first, second = tbl.iloc[:, 0], tbl.iloc[:, 1]
+        numeric_like = second.astype(str).str[0].str.isdigit().mean() > 0.5
+        tbl = tbl.iloc[:, 1:17] if numeric_like else tbl.iloc[:, :16]
+    else:
+        tbl = tbl.iloc[:, :16]
+
+    tbl.columns = COLUMN_NAMES
+    return tbl
+
+# --------------------------------------------------------------------------- #
+# 7. Conversión numérica (puntual) – evita errores Parquet/Impala
+# --------------------------------------------------------------------------- #
+def _to_float(s: str):
+    if pd.isna(s):
+        return None
+    s = str(s).replace(",", "").strip()
+    sign = -1 if s.endswith("-") or (s.startswith("(") and s.endswith(")")) else 1
+    s = s.strip("()- ")
+    try:
+        return float(s) * sign
+    except ValueError:
+        return None
+
+
+def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    for col in NUMERIC_COLS:
+        if col in df.columns:
+            df[col] = df[col].apply(_to_float)
+    return df
+
+# --------------------------------------------------------------------------- #
+# 8. Filtro de filas‑cabecera / fragmentos
+# --------------------------------------------------------------------------- #
+HEADER_TOKENS = {
+    "PRODUCT", 
+    "FORM", 
+    "UNIT", 
+    "WEIGHT", 
+    "PALLET", 
+    "MIN", 
+    "ORDER",  
+    "QUANTITY", 
+    "DAYS", 
+    "LEAD", 
+    "TIME", 
+    "STOCKING", 
+    "STATUS", 
+    "FOB", 
+    "DLV",
+}
+
+PRICE_HEADER_PATTERNS = (
+    "PRICE / UNIT",
+    "PRICE IN US DOLLAR",
+    "PRICE IN US DOLLARS",
+    "MONTHLY",
+    "PAGE",  # "Page 2 of 13"
 )
 
--- 2. Running Total acumulado por ese ranking
-M_Running Total =
-VAR _CurrentRank = [M_Rank]          -- capturamos el rango del punto actual
-RETURN
-CALCULATE (
-    [TT Mrgn],                       -- métrica que estamos acumulando
-    FILTER (
-        ALL ( Struct_MatMst[PROD_DESC] ),   -- quita filtros de producto
-        [M_Rank] <= _CurrentRank            -- conserva los de rango menor-igual
-    )
-)
+_PRICE_RE = re.compile("|".join(re.escape(p) for p in PRICE_HEADER_PATTERNS), re.I)
 
---3. % acumulado (opcional para Pareto)
-M_Cumulative % =
-DIVIDE (
-    [M_Running Total],
-    CALCULATE ( [TT Mrgn], ALL ( Struct_MatMst[PROD_DESC] ) )
-)
+
+def _is_header_row(row: pd.Series) -> bool:
+    """Devuelve True si la fila es cabecera u otro fragmento que debe eliminarse."""
+    combined = " ".join(row.astype(str)).upper()
+    if _PRICE_RE.search(combined):
+        return True
+    first = str(row.iloc[0]).strip().upper()
+    if first and first[0].isdigit():
+        return False
+    if first.startswith("PRODUCT") and str(row.iloc[1]).upper().startswith("FORMULA"):
+        return True
+    if pd.isna(row["list_price"]):
+        if any(tok in combined for tok in HEADER_TOKENS):
+            return True
+    return False
+
+# --------------------------------------------------------------------------- #
+# 9. Función principal
+# --------------------------------------------------------------------------- #
+def read_file(pdf: str | pathlib.Path) -> pd.DataFrame:
+    # Procesa un PDF y devuelve un DataFrame limpio y estandarizado.
+    tables = _read_tables(str(pdf))
+
+    # Normaliza cada tabla y descarta las vacías
+    std_tables = [t for t in (_standardize(x) for x in tables) if t is not None]
+    if not std_tables:
+        return pd.DataFrame()
+
+    df = pd.concat(std_tables, ignore_index=True)
+
+    # Elimina cabeceras/fragmentos pero conserva la primera fila de datos real
+    df = df[~df.apply(_is_header_row, axis=1)].reset_index(drop=True)
+    df.dropna(how="all", inplace=True)
+
+    # Metadatos
+    df["plant_location"] = extract_plant_location(pdf)
+    df["date_inserted"] = extract_effective_date(pdf)
+    df["source"] = pathlib.Path(pdf).name
+
+    df = _fix_numeric(df)
+    return df[[*COLUMN_NAMES, "plant_location", "date_inserted", "source"]]
+
+///////////////////////////////////////////
+///////////////////////////////////////////
+///////////////////////////////////////////
+///////////////////////////////////////////
+CREATE VIEW vw_comp_price_horizontal_norm AS
+SELECT
+  product_number,                                      -- 1. product_number
+  formula_code,                                        -- 2. formula_code
+  product_name,                                        -- 3. product_name
+  CAST(NULL AS STRING)           AS ref_col,           -- 4. ref_col (Leave blank)
+  unit_weight,                                         -- 5. unit_weight
+  product_form,                                        -- 6. product_form
+  fob_or_dlv,                                          -- 7. fob_or_dlv
+  price_change,                                        -- 8. price_change
+  list_price                     AS single_unit_list_price,   -- 9. single_unit_list_price
+  full_pallet_price              AS full_pallet_list_price,   -- 10. full_pallet_list_price
+  CAST(NULL AS DOUBLE)           AS pkg_bulk_discount,        -- 11. pkg_bulk_discount (Not needed)
+  full_load_best_price           AS best_net_list_price,       -- 12. best_net_list_price
+  CAST(NULL AS STRING)           AS species,                  -- 13. species (Not needed)
+  plant_location,                                      -- 14. plant_location
+  date_inserted                                        -- 15. date_inserted
+FROM comp_price_horizontal_files;
+-----------------------------------------------------------------------------------------------------------
+
+INSERT INTO
+  comp_price_grid (
+    product_number,
+    formula_code,
+    product_name,
+    ref_col,
+    unit_weight,
+    product_form,
+    fob_or_dlv,
+    price_change,
+    single_unit_list_price,
+    full_pallet_list_price,
+    pkg_bulk_discount,
+    best_net_list_price,
+    species,
+    plant_location,
+    date_inserted
+  )
+SELECT
+  product_number,
+  formula_code,
+  product_name,
+  CAST(NULL AS STRING) AS ref_col, -- siempre blank
+  unit_weight,
+  product_form,
+  fob_or_dlv,
+  price_change,
+  single_unit_list_price,
+  full_pallet_list_price,
+  CAST(NULL AS DOUBLE) AS pkg_bulk_discount, -- leave-blank
+  best_net_list_price,
+  species,
+  plant_location,
+  date_inserted
+FROM
+  vw_comp_price_horizontal_norm;
