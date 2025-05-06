@@ -1,42 +1,72 @@
-def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """
-    Devuelve cada tabla con exactamente 16 columnas estándar (COLUMN_NAMES)
-    y, cuando existe, agrega la auxiliar '__raw_species'.
-    Acepta tablas de 14-18 columnas provenientes de Tabula.
-    """
-    n = tbl.shape[1]
+ValueError: Length mismatch: Expected axis has 17 elements, new values have 16 elements
+ValueError                                Traceback (most recent call last)
+/tmp/ipykernel_113/1215835711.py in <module>
+      1 if __name__ == "__main__":
+----> 2     excecute_process()
 
-    # ── 0) Demasiado corta ← descartar
-    if n < 14:
-        return None
+/tmp/ipykernel_113/511133302.py in excecute_process()
+     35 
+     36         # Parsear (horizontal)
+---> 37         df = pfh.read_file(str(local_pdf_path))
+     38 
+     39         # Observa columnas
 
-    # ── 1) Tablas ≥17 columnas → recorta a 16 y guarda categoría
-    if n >= 17:
-        first, second = tbl.iloc[:, 0], tbl.iloc[:, 1]
-        second_is_numeric = second.astype(str).str[0].str.isdigit().mean() > 0.5
+~/competitor_data/purina_file_horizontal.py in read_file(pdf)
+    343 
+    344     # Normaliza cada tabla y descarta las vacías
+--> 345     std_tables = [t for t in (_standardize(x) for x in tables) if t is not None]
+    346     if not std_tables:
+    347         return pd.DataFrame()
 
-        if second_is_numeric:
-            species_hint = first.copy()
-            tbl = tbl.iloc[:, 1:17].copy()      # ahora son 16
-            tbl["__raw_species"] = species_hint # 17.ª columna auxiliar
-        else:
-            tbl = tbl.iloc[:, :16].copy()
+~/competitor_data/purina_file_horizontal.py in <listcomp>(.0)
+    343 
+    344     # Normaliza cada tabla y descarta las vacías
+--> 345     std_tables = [t for t in (_standardize(x) for x in tables) if t is not None]
+    346     if not std_tables:
+    347         return pd.DataFrame()
 
-    # ── 2) Tablas 15-16 columnas → rellena pads hasta 16
-    elif n in (15, 16):
-        while tbl.shape[1] < 16:
-            tbl[f"__pad_{tbl.shape[1]}"] = None
-        tbl = tbl.iloc[:, :16].copy()
+~/competitor_data/purina_file_horizontal.py in <genexpr>(.0)
+    343 
+    344     # Normaliza cada tabla y descarta las vacías
+--> 345     std_tables = [t for t in (_standardize(x) for x in tables) if t is not None]
+    346     if not std_tables:
+    347         return pd.DataFrame()
 
-    # ── 3) Tablas 14 columnas → rellena dos pads
-    elif n == 14:
-        tbl["__pad_a"] = None
-        tbl["__pad_b"] = None
-        tbl = tbl.iloc[:, :16].copy()
+~/competitor_data/purina_file_horizontal.py in _standardize(tbl)
+    214 
+    215     # ── 4. Etiqueta las 16 columnas finales ───────────────────────
+--> 216     tbl.columns = COLUMN_NAMES   # orden estándar
+    217 
+    218     return tbl
 
-    # ── 4) Asigna nombres: 16 estándar + las extras que queden
-    base_cols = COLUMN_NAMES
-    extra_cols = [c for c in tbl.columns if c not in COLUMN_NAMES][: (tbl.shape[1] - 16)]
-    tbl.columns = base_cols + extra_cols
+~/.local/lib/python3.7/site-packages/pandas/core/generic.py in __setattr__(self, name, value)
+   5498         try:
+   5499             object.__getattribute__(self, name)
+-> 5500             return object.__setattr__(self, name, value)
+   5501         except AttributeError:
+   5502             pass
 
-    return tbl
+~/.local/lib/python3.7/site-packages/pandas/_libs/properties.pyx in pandas._libs.properties.AxisProperty.__set__()
+
+~/.local/lib/python3.7/site-packages/pandas/core/generic.py in _set_axis(self, axis, labels)
+    764     def _set_axis(self, axis: int, labels: Index) -> None:
+    765         labels = ensure_index(labels)
+--> 766         self._mgr.set_axis(axis, labels)
+    767         self._clear_item_cache()
+    768 
+
+~/.local/lib/python3.7/site-packages/pandas/core/internals/managers.py in set_axis(self, axis, new_labels)
+    214     def set_axis(self, axis: int, new_labels: Index) -> None:
+    215         # Caller is responsible for ensuring we have an Index object.
+--> 216         self._validate_set_axis(axis, new_labels)
+    217         self.axes[axis] = new_labels
+    218 
+
+~/.local/lib/python3.7/site-packages/pandas/core/internals/base.py in _validate_set_axis(self, axis, new_labels)
+     56         elif new_len != old_len:
+     57             raise ValueError(
+---> 58                 f"Length mismatch: Expected axis has {old_len} elements, new "
+     59                 f"values have {new_len} elements"
+     60             )
+
+ValueError: Length mismatch: Expected axis has 17 elements, new values have 16 elements
