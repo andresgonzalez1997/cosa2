@@ -1,45 +1,145 @@
-# --------------------------------------------------------------------------- #
-# 9. Categorías  →  columna «species»
-# --------------------------------------------------------------------------- #
-_TITLE_RE = re.compile(r"^[A-Z][A-Z\s/&-]{2,}$")   # Solo letras, espacios y guiones
+[1/1] Procesando: 2025.03.03 Statesville.pdf
+Got stderr: May 07, 2025 5:36:04 AM org.apache.pdfbox.pdmodel.font.PDTrueTypeFont <init>
+WARNING: Using fallback font 'LiberationSans' for 'ArialMT'
 
-def add_species_column(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Propaga el encabezado de sección a 'species' y
-    elimina las filas-título, sin importar si cayó en
-    product_number o product_name.
-    """
-    df["species"] = None
-    current = None
-    drop = []
+Got stderr: May 07, 2025 5:36:07 AM org.apache.pdfbox.pdmodel.font.PDTrueTypeFont <init>
+WARNING: Using fallback font 'LiberationSans' for 'ArialMT'
 
-    price_cols = [
-        "list_price",
-        "full_pallet_price",
-        "half_load_full_pallet_price",
-        "full_load_full_pallet_price",
-        "full_load_best_price",
-    ]
+[DEBUG] Columnas del DF tras parsear:
+ ['product_number', 'formula_code', 'product_name', 'product_form', 'unit_weight', 'pallet_quantity', 'stocking_status', 'min_order_quantity', 'days_lead_time', 'fob_or_dlv', 'price_change', 'list_price', 'full_pallet_price', 'half_load_full_pallet_price', 'full_load_full_pallet_price', 'full_load_best_price', 'plant_location', 'date_inserted', 'source', 'species']
+  product_number formula_code             product_name product_form  \
+0           5555         5D03   AQUAMAX FINGERLING 300     EXTRUDED   
+1           5554         5D02  AQUAMAX FRY STARTER 200     EXTRUDED   
+2           1470         5D09   AQUAMAX POND FISH 4000     EXTRUDED   
+3          45303         5D05    AQUAMAX SPORTFISH 500     EXTRUDED   
+4           1468         5D06    AQUAMAX SPORTFISH 600     EXTRUDED   
 
-    for i, row in df.iterrows():
-        # Texto en las dos primeras columnas (puede venir en cualquiera)
-        first_txt  = str(row["product_number"]).strip().upper() if pd.notna(row["product_number"]) else ""
-        second_txt = str(row["product_name"]).strip().upper()   if pd.notna(row["product_name"])   else ""
+  unit_weight  pallet_quantity stocking_status  min_order_quantity  \
+0    50.00 LB             40.0              SO                 0.0   
+1    50.00 LB             40.0              SO                 0.0   
+2    50.00 LB             40.0              SO                 0.0   
+3    50.00 LB             40.0              SO                 0.0   
+4    50.00 LB             40.0              SO                 0.0   
 
-        title_txt = first_txt if _TITLE_RE.match(first_txt) else (
-                    second_txt if _TITLE_RE.match(second_txt) else "")
+   days_lead_time fob_or_dlv  price_change  list_price  full_pallet_price  \
+0             5.0        DLV          0.00       96.09              96.09   
+1             5.0        DLV          0.00      101.66             101.66   
+2             5.0        DLV          0.35       39.74              39.74   
+3             5.0        DLV          0.38       50.71              50.71   
+4             5.0        DLV          0.38       50.71              50.71   
 
-        # Tiene precios (>0)  →  es producto real
-        has_price = any(pd.notna(row[c]) and row[c] not in (0, 0.0) for c in price_cols)
+   half_load_full_pallet_price  full_load_full_pallet_price  \
+0                        95.84                        95.59   
+1                       101.41                       101.16   
+2                        39.49                        39.24   
+3                        50.46                        50.21   
+4                        50.46                        50.21   
 
-        is_title = bool(title_txt) and not has_price
+   full_load_best_price  plant_location date_inserted  \
+0                 92.72  STATESVILLE NC    2025-03-03   
+1                 98.13  STATESVILLE NC    2025-03-03   
+2                 38.06  STATESVILLE NC    2025-03-03   
+3                 48.70  STATESVILLE NC    2025-03-03   
+4                 48.70  STATESVILLE NC    2025-03-03   
 
-        if is_title:
-            current = title_txt                      # guarda título
-            drop.append(i)                           # marca para borrar
-        else:
-            df.at[i, "species"] = current            # propaga título
+                       source species  
+0  2025.03.03 Statesville.pdf    None  
+1  2025.03.03 Statesville.pdf    None  
+2  2025.03.03 Statesville.pdf    None  
+3  2025.03.03 Statesville.pdf    None  
+4  2025.03.03 Statesville.pdf    None  
+[DEBUG] Columnas tras set_column_types:
+ ['product_number', 'formula_code', 'product_name', 'product_form', 'unit_weight', 'pallet_quantity', 'stocking_status', 'min_order_quantity', 'days_lead_time', 'fob_or_dlv', 'price_change', 'list_price', 'full_pallet_price', 'half_load_full_pallet_price', 'full_load_full_pallet_price', 'full_load_best_price', 'plant_location', 'date_inserted', 'source', 'species']
+[INFO] DataFrame shape: (129, 20)
+  product_number formula_code                   product_name product_form  \
+0           5555         5D03         AQUAMAX FINGERLING 300     EXTRUDED   
+1           5554         5D02        AQUAMAX FRY STARTER 200     EXTRUDED   
+2           1470         5D09         AQUAMAX POND FISH 4000     EXTRUDED   
+3          45303         5D05          AQUAMAX SPORTFISH 500     EXTRUDED   
+4           1468         5D06          AQUAMAX SPORTFISH 600     EXTRUDED   
+5    3003410-706         5D6R          AQUAMAX SPORTFISH MVP     EXTRUDED   
+6           1363         52C1                 GAME FISH CHOW     EXTRUDED   
+7          40967         51J2              PURINA CATFISH 32     EXTRUDED   
+8    3002460-634         31BB         AR BLOCK 200LB PLASTIC       LIQUID   
+9    3003995-634         329T  AR BLOCK HI-FAT 200LB PLASTIC       LIQUID   
 
-    df.drop(index=drop, inplace=True)
-    df.reset_index(drop=True, inplace=True)
-    return df
+  unit_weight  pallet_quantity stocking_status  min_order_quantity  \
+0    50.00 LB             40.0              SO                 0.0   
+1    50.00 LB             40.0              SO                 0.0   
+2    50.00 LB             40.0              SO                 0.0   
+3    50.00 LB             40.0              SO                 0.0   
+4    50.00 LB             40.0              SO                 0.0   
+5    50.00 LB             40.0              SO                 0.0   
+6    50.00 LB             40.0              SO                 0.0   
+7    50.00 LB             40.0              SO                 0.0   
+8   200.00 LB             10.0              SO                 0.0   
+9   200.00 LB             10.0              SO                 0.0   
+
+   days_lead_time fob_or_dlv  price_change  list_price  full_pallet_price  \
+0             5.0        DLV          0.00       96.09              96.09   
+1             5.0        DLV          0.00      101.66             101.66   
+2             5.0        DLV          0.35       39.74              39.74   
+3             5.0        DLV          0.38       50.71              50.71   
+4             5.0        DLV          0.38       50.71              50.71   
+5             5.0        DLV          0.37       51.29              51.29   
+6             5.0        DLV          0.18       34.41              34.41   
+7             5.0        DLV          0.12       31.94              31.94   
+8             5.0        DLV          1.50      105.05             105.05   
+9             5.0        DLV          1.50      115.85             115.85   
+
+   half_load_full_pallet_price  full_load_full_pallet_price  \
+0                        95.84                        95.59   
+1                       101.41                       101.16   
+2                        39.49                        39.24   
+3                        50.46                        50.21   
+4                        50.46                        50.21   
+5                        51.04                        50.79   
+6                        34.16                        33.91   
+7                        31.69                        31.44   
+8                       104.05                       103.05   
+9                       114.85                       113.85   
+
+   full_load_best_price  plant_location date_inserted  \
+0                 92.72  STATESVILLE NC    2025-03-03   
+1                 98.13  STATESVILLE NC    2025-03-03   
+2                 38.06  STATESVILLE NC    2025-03-03   
+3                 48.70  STATESVILLE NC    2025-03-03   
+4                 48.70  STATESVILLE NC    2025-03-03   
+5                 49.27  STATESVILLE NC    2025-03-03   
+6                 32.89  STATESVILLE NC    2025-03-03   
+7                 30.50  STATESVILLE NC    2025-03-03   
+8                 99.96  STATESVILLE NC    2025-03-03   
+9                110.43  STATESVILLE NC    2025-03-03   
+
+                       source species  
+0  2025.03.03 Statesville.pdf    <NA>  
+1  2025.03.03 Statesville.pdf    <NA>  
+2  2025.03.03 Statesville.pdf    <NA>  
+3  2025.03.03 Statesville.pdf    <NA>  
+4  2025.03.03 Statesville.pdf    <NA>  
+5  2025.03.03 Statesville.pdf    <NA>  
+6  2025.03.03 Statesville.pdf    <NA>  
+7  2025.03.03 Statesville.pdf    <NA>  
+8  2025.03.03 Statesville.pdf    <NA>  
+9  2025.03.03 Statesville.pdf    <NA>  
+[DEBUG] Nombre base para la tabla temporal: 2025_03_03_statesville
+uploading data to comp_price_horizontal_files
+export_data_to_parquet_file
+upload_parquet_file_to_hdfs
+upload_parquet_file_to_hdfs done.
+create_temp_table_from_parquet_file
+[DEBUG] Columns in temp table comp_price_horizontal_files_2025_03_03_statesville after creation: [('product_number', 'string'), ('formula_code', 'string'), ('product_name', 'string'), ('product_form', 'string'), ('unit_weight', 'string'), ('pallet_quantity', 'double'), ('stocking_status', 'string'), ('min_order_quantity', 'double'), ('days_lead_time', 'double'), ('fob_or_dlv', 'string'), ('price_change', 'double'), ('list_price', 'double'), ('full_pallet_price', 'double'), ('half_load_full_pallet_price', 'double'), ('full_load_full_pallet_price', 'double'), ('full_load_best_price', 'double'), ('plant_location', 'string'), ('date_inserted', 'string'), ('source', 'string')]
+#########################################################################
+temp table created from parquet file.
+[DEBUG] column_def for temp table: product_number,formula_code,product_name,product_form,unit_weight,pallet_quantity,stocking_status,min_order_quantity,days_lead_time,fob_or_dlv,price_change,list_price,full_pallet_price,half_load_full_pallet_price,full_load_full_pallet_price,full_load_best_price,plant_location,date_inserted,source
+#########################################################################
+data uploaded to main table.
+main_table_refresh_metadata
+main table refreshed.
+drop_temp_table
+temp table dropped.
+deleting_temp_parquet_file
+[INFO] '2025.03.03 Statesville.pdf' subido correctamente a 'comp_price_horizontal_files'.
+[INFO] Archivo '2025.03.03 Statesville.pdf' eliminado de SharePoint.
+
+[INFO] Proceso completado para todos los PDFs.
