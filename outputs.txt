@@ -1,73 +1,166 @@
-ValueError: could not convert string to float: 'UNIT\rWEIGHT'
-ValueError                                Traceback (most recent call last)
-/tmp/ipykernel_111/3460413390.py in <module>
-      1 if __name__ == "__main__":
-      2     sample = "2025.03.03 Statesville.pdf"
-----> 3     demo = read_file(sample)
-      4     print(demo[["product_name", "species"]].head(25))
-      5     print("Shape:", demo.shape)
+"""
+Purina horizontal price-list reader (Python 3.7).
 
-/tmp/ipykernel_111/4028096623.py in read_file(pdf)
-     19     df["source"] = pathlib.Path(pdf).name
-     20 
----> 21     df = _fix_numeric(df)
-     22 
-     23     return df[
+• Keeps original extraction logic (lattice, ≥10-column tables).
+• Preserves one-column section headers long enough to create the new
+  ‘species’ column, then drops them.
+• Robust numeric conversion — bad tokens become NaN (no ValueError).
+"""
 
-/tmp/ipykernel_111/3248475371.py in _fix_numeric(df)
-     10             .str.replace(",", "", regex=False)
-     11             .replace({"": np.nan, "nan": np.nan})
----> 12             .astype(float)
-     13         )
-     14     return df
+from __future__ import annotations
+import pathlib, re
+from datetime import datetime
+from typing import List, Optional
 
-~/.local/lib/python3.7/site-packages/pandas/core/generic.py in astype(self, dtype, copy, errors)
-   5813         else:
-   5814             # else, only a single dtype is given
--> 5815             new_data = self._mgr.astype(dtype=dtype, copy=copy, errors=errors)
-   5816             return self._constructor(new_data).__finalize__(self, method="astype")
-   5817 
+import numpy as np
+import pandas as pd
+import tabula
 
-~/.local/lib/python3.7/site-packages/pandas/core/internals/managers.py in astype(self, dtype, copy, errors)
-    416 
-    417     def astype(self: T, dtype, copy: bool = False, errors: str = "raise") -> T:
---> 418         return self.apply("astype", dtype=dtype, copy=copy, errors=errors)
-    419 
-    420     def convert(
 
-~/.local/lib/python3.7/site-packages/pandas/core/internals/managers.py in apply(self, f, align_keys, ignore_failures, **kwargs)
-    325                     applied = b.apply(f, **kwargs)
-    326                 else:
---> 327                     applied = getattr(b, f)(**kwargs)
-    328             except (TypeError, NotImplementedError):
-    329                 if not ignore_failures:
+# ────────────────────────── 1. Static config ───────────────────────────────
+COLUMN_NAMES = [
+    "product_number", "formula_code", "product_name", "product_form",
+    "unit_weight", "pallet_quantity", "stocking_status", "min_order_quantity",
+    "days_lead_time", "fob_or_dlv", "price_change", "list_price",
+    "full_pallet_price", "full_load_best_price",
+]
 
-~/.local/lib/python3.7/site-packages/pandas/core/internals/blocks.py in astype(self, dtype, copy, errors)
-    589         values = self.values
-    590 
---> 591         new_values = astype_array_safe(values, dtype, copy=copy, errors=errors)
-    592 
-    593         new_values = maybe_coerce_values(new_values)
+TABULA_OPTIONS = dict(pages="all", lattice=True, guess=False, area=None, columns=None)
 
-~/.local/lib/python3.7/site-packages/pandas/core/dtypes/cast.py in astype_array_safe(values, dtype, copy, errors)
-   1307 
-   1308     try:
--> 1309         new_values = astype_array(values, dtype, copy=copy)
-   1310     except (ValueError, TypeError):
-   1311         # e.g. astype_nansafe can fail on object-dtype of strings
+_SPECIES_RX = re.compile(
+    r"^\s*(AQUACULTURE|CATTLE|GOAT|SHEEP|SWINE|POULTRY)", re.IGNORECASE
+)
 
-~/.local/lib/python3.7/site-packages/pandas/core/dtypes/cast.py in astype_array(values, dtype, copy)
-   1255 
-   1256     else:
--> 1257         values = astype_nansafe(values, dtype, copy=copy)
-   1258 
-   1259     # in pandas we don't store numpy str dtypes, so convert to object
+_DATE_RXS = [
+    r"(\d{2}/\d{2}/\d{4})", r"(\d{4}\.\d{2}\.\d{2})", r"(\d{2}-\d{2}-\d{4})"
+]
 
-~/.local/lib/python3.7/site-packages/pandas/core/dtypes/cast.py in astype_nansafe(arr, dtype, copy, skipna)
-   1199     if copy or is_object_dtype(arr.dtype) or is_object_dtype(dtype):
-   1200         # Explicit copy, or required since NumPy can't view from / to object.
--> 1201         return arr.astype(dtype, copy=True)
-   1202 
-   1203     return arr.astype(dtype, copy=copy)
 
-ValueError: could not convert string to float: 'UNIT\rWEIGHT'
+# ────────────────────────── 2. Helper functions ────────────────────────────
+def _read_tables(pdf: str):
+    return tabula.read_pdf(pdf, **TABULA_OPTIONS)
+
+
+def _standardize(df: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """
+    • Keep 1-col header rows so we can read species.
+    • Keep data tables with ≥10 cols (original rule).
+    • Discard anything else.
+    """
+    if df.empty:
+        return None
+
+    first_cell = str(df.iloc[0, 0]).strip()
+
+    # Header row  → convert to placeholder with same width
+    if df.shape[1] == 1 and _SPECIES_RX.match(first_cell):
+        hdr = pd.DataFrame({"product_name": [first_cell]})
+        for col in COLUMN_NAMES:
+            if col not in hdr.columns:
+                hdr[col] = np.nan
+        return hdr[COLUMN_NAMES]
+
+    # Data table must have at least 10 cols (your original cutoff)
+    if df.shape[1] < 10:
+        return None
+
+    # Pad & rename to match COLUMN_NAMES
+    df.columns = [f"col_{i}" for i in range(df.shape[1])]
+    while df.shape[1] < len(COLUMN_NAMES):
+        df[f"col_{df.shape[1]}"] = np.nan
+    df = df.iloc[:, : len(COLUMN_NAMES)]
+    df.columns = COLUMN_NAMES
+    return df
+
+
+def _is_header_row(row: pd.Series) -> bool:
+    return bool(_SPECIES_RX.match(str(row["product_name"]).strip()))
+
+
+def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert numeric columns; non-numeric tokens → NaN (no crash)."""
+    numeric = [
+        "unit_weight", "pallet_quantity", "min_order_quantity",
+        "days_lead_time", "price_change", "list_price",
+        "full_pallet_price", "full_load_best_price",
+    ]
+    for col in numeric:
+        df[col] = pd.to_numeric(
+            df[col]
+              .astype(str)
+              .str.replace(",", "", regex=False)
+              .replace({"": np.nan, "nan": np.nan}),
+            errors="coerce"         # <- crucial: bad strings → NaN
+        )
+    return df
+
+
+def _extract_first_match(rxs: List[str], text: str) -> Optional[str]:
+    for pat in rxs:
+        m = re.search(pat, text)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _extract_effective_date(pdf: str | pathlib.Path) -> Optional[datetime]:
+    stem = pathlib.Path(pdf).stem
+    token = _extract_first_match(_DATE_RXS, stem)
+    if token:
+        for fmt in ("%m/%d/%Y", "%Y.%m.%d", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(token, fmt)
+            except ValueError:
+                continue
+    return None
+
+
+def _extract_plant_location(pdf: str | pathlib.Path) -> str:
+    return pathlib.Path(pdf).stem.split()[-1].upper()
+
+
+def _add_species_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Create & propagate the new ‘species’ column."""
+    current, out = None, []
+    for name in df["product_name"].astype(str):
+        m = _SPECIES_RX.match(name.strip())
+        if m:
+            current = m.group(1).upper()
+            out.append(None)      # header row → drop later
+        else:
+            out.append(current)
+    df["species"] = out
+    return df
+
+
+# ────────────────────────── 3. Main entry point ────────────────────────────
+def read_file(pdf: str | pathlib.Path) -> pd.DataFrame:
+    tables = _read_tables(str(pdf))
+    std = [t for t in (_standardize(x) for x in tables) if t is not None]
+    if not std:
+        return pd.DataFrame()     # unlikely with your PDFs
+
+    df = pd.concat(std, ignore_index=True)
+
+    df = _add_species_column(df)                          # propagate species
+    df = df[~df.apply(_is_header_row, axis=1)].reset_index(drop=True)
+    df.dropna(how="all", inplace=True)
+
+    # File-level metadata
+    df["plant_location"] = _extract_plant_location(pdf)
+    df["date_inserted"] = _extract_effective_date(pdf)
+    df["source"] = pathlib.Path(pdf).name
+
+    df = _fix_numeric(df)
+
+    return df[
+        [*COLUMN_NAMES, "plant_location", "date_inserted", "source", "species"]
+    ]
+
+
+# ────────────────────────── 4. Quick local test ────────────────────────────
+if __name__ == "__main__":
+    sample = "2025.03.03 Statesville.pdf"       # change path as needed
+    demo = read_file(sample)
+    print(demo[["product_name", "species"]].head(25))
+    print("Shape:", demo.shape)
