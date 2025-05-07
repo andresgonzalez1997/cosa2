@@ -1,234 +1,25 @@
-"""
-Lectura y limpieza de listas de precio Purina (PDF horizontales).
+[1/1] Procesando: 2025.03.03 Statesville.pdf
+Got stderr: May 07, 2025 7:56:41 PM org.apache.pdfbox.pdmodel.font.FileSystemFontProvider loadDiskCache
+WARNING: New fonts found, font cache will be re-built
+May 07, 2025 7:56:41 PM org.apache.pdfbox.pdmodel.font.FileSystemFontProvider <init>
+WARNING: Building on-disk font cache, this may take a while
+May 07, 2025 7:56:41 PM org.apache.pdfbox.pdmodel.font.FileSystemFontProvider <init>
+WARNING: Finished building on-disk font cache, found 42 fonts
+May 07, 2025 7:56:41 PM org.apache.pdfbox.pdmodel.font.PDTrueTypeFont <init>
+WARNING: Using fallback font 'LiberationSans' for 'ArialMT'
 
-Flujo:
-1. Lee todas las tablas con tabula-py.
-2. Estandariza columnas y concatena.
-3. Agrega la columna `species` propagando la categoría por sección.
-4. Elimina filas de cabecera/fragmento.
-5. Convierte numéricos, añade metadatos y devuelve columnas ordenadas.
+[DEBUG] Columnas del DF tras parsear:
+ ['product_number', 'formula_code', 'product_name', 'product_form', 'unit_weight', 'pallet_quantity', 'stocking_status', 'min_order_quantity', 'days_lead_time', 'fob_or_dlv', 'price_change', 'list_price', 'full_pallet_price', 'full_load_best_price', 'plant_location', 'date_inserted', 'source', 'species']
+Empty DataFrame
+Columns: [product_number, formula_code, product_name, product_form, unit_weight, pallet_quantity, stocking_status, min_order_quantity, days_lead_time, fob_or_dlv, price_change, list_price, full_pallet_price, full_load_best_price, plant_location, date_inserted, source, species]
+Index: []
+[DEBUG] Columnas tras set_column_types:
+ ['product_number', 'formula_code', 'product_name', 'product_form', 'unit_weight', 'pallet_quantity', 'stocking_status', 'min_order_quantity', 'days_lead_time', 'fob_or_dlv', 'price_change', 'list_price', 'full_pallet_price', 'full_load_best_price', 'plant_location', 'date_inserted', 'source', 'species']
+[INFO] DataFrame shape: (0, 18)
+Empty DataFrame
+Columns: [product_number, formula_code, product_name, product_form, unit_weight, pallet_quantity, stocking_status, min_order_quantity, days_lead_time, fob_or_dlv, price_change, list_price, full_pallet_price, full_load_best_price, plant_location, date_inserted, source, species]
+Index: []
+[INFO] DF vacío, no se suben datos.
+[INFO] Archivo '2025.03.03 Statesville.pdf' eliminado de SharePoint.
 
-Probado en Python 3.7.
-"""
-
-from __future__ import annotations
-
-import pathlib
-import re
-from datetime import datetime
-from typing import List, Optional
-
-import numpy as np
-import pandas as pd
-import tabula
-
-# --------------------------------------------------------------------------- #
-# 1 · Configuración
-# --------------------------------------------------------------------------- #
-
-COLUMN_NAMES = [
-    "product_number",
-    "formula_code",
-    "product_name",
-    "product_form",
-    "unit_weight",
-    "pallet_quantity",
-    "stocking_status",
-    "min_order_quantity",
-    "days_lead_time",
-    "fob_or_dlv",
-    "price_change",
-    "list_price",
-    "full_pallet_price",
-    "full_load_best_price",
-]
-
-TABULA_OPTIONS = {
-    "pages": "all",
-    "guess": False,
-    "lattice": True,
-    "area": None,   # área dinámica
-    "columns": None,
-}
-
-# Categorías válidas (título de sección)
-SPECIES_PATTERN = re.compile(
-    r"^\s*(AQUACULTURE|CATTLE|GOAT|SHEEP|SWINE|POULTRY)\b", re.IGNORECASE
-)
-
-DATE_PATTERNS = [
-    r"(\d{2}/\d{2}/\d{4})",     # 10/07/2024
-    r"(\d{4}\.\d{2}\.\d{2})",   # 2024.10.07
-    r"(\d{2}-\d{2}-\d{4})",     # 07-10-2024
-]
-
-# --------------------------------------------------------------------------- #
-# 2 · Utilidades internas
-# --------------------------------------------------------------------------- #
-
-
-def _read_tables(pdf_path: str) -> List[pd.DataFrame]:
-    """Lee todas las tablas de un PDF con tabula-py."""
-    return tabula.read_pdf(pdf_path, **TABULA_OPTIONS)
-
-
-def _standardize(df: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """
-    Convierte cada tabla a formato uniforme y descarta las irrelevantes.
-    Si la tabla es únicamente la fila-categoría (1-3 columnas), la
-    preserva para que luego se propague la especie.
-    """
-    if df.empty:
-        return None
-
-    first_cell = str(df.iloc[0, 0]).strip()
-
-    # —— Mini-tabla con título de sección (fila-categoría) ——
-    if df.shape[1] < 4 and SPECIES_PATTERN.match(first_cell):
-        # Crea una fila con 'product_name' = categoría y el resto NaN
-        header_row = pd.DataFrame(
-            {"product_name": [first_cell]},
-            columns=["product_name"],
-        )
-        # Rellena columnas faltantes con NaN y reordena
-        for col in COLUMN_NAMES:
-            if col not in header_row.columns:
-                header_row[col] = np.nan
-        header_row = header_row[COLUMN_NAMES]
-        return header_row
-
-    # —— Tablas que sí contienen datos útiles ——
-    if df.shape[1] < 10:                # tablas muy pequeñas → descartar
-        return None
-
-    # Renombra con índice genérico
-    df.columns = [f"col_{i}" for i in range(df.shape[1])]
-
-    # Añade columnas vacías hasta completar las 14 esperadas
-    while df.shape[1] < len(COLUMN_NAMES):
-        df[f"col_{df.shape[1]}"] = np.nan
-
-    df = df.iloc[:, : len(COLUMN_NAMES)]
-    df.columns = COLUMN_NAMES
-    return df
-
-
-def _is_header_row(row: pd.Series) -> bool:
-    """Detecta filas de cabecera/fragmento ahora sobrantes."""
-    return bool(SPECIES_PATTERN.match(str(row["product_name"]).strip()))
-
-
-def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
-    """Convierte columnas numéricas en float."""
-    numeric_cols = [
-        "unit_weight",
-        "pallet_quantity",
-        "min_order_quantity",
-        "days_lead_time",
-        "price_change",
-        "list_price",
-        "full_pallet_price",
-        "full_load_best_price",
-    ]
-    for col in numeric_cols:
-        df[col] = (
-            df[col]
-            .astype(str)
-            .str.replace(",", "", regex=False)
-            .replace({"": np.nan, "nan": np.nan})
-            .astype(float)
-        )
-    return df
-
-
-def _extract_first_match(patterns: List[str], text: str) -> Optional[str]:
-    for pat in patterns:
-        m = re.search(pat, text)
-        if m:
-            return m.group(1)
-    return None
-
-
-def extract_effective_date(pdf_path: str | pathlib.Path) -> Optional[datetime]:
-    """Extrae la fecha efectiva del nombre del archivo."""
-    stem = pathlib.Path(pdf_path).stem
-    match = _extract_first_match(DATE_PATTERNS, stem)
-    if match:
-        for fmt in ("%m/%d/%Y", "%Y.%m.%d", "%d-%m-%Y"):
-            try:
-                return datetime.strptime(match, fmt)
-            except ValueError:
-                continue
-    return None
-
-
-def extract_plant_location(pdf_path: str | pathlib.Path) -> str:
-    """Ej.: 'STATESVILLE' desde '2024.10.07 Statesville.pdf'."""
-    return pathlib.Path(pdf_path).stem.split()[-1].upper()
-
-
-# --------------------------------------------------------------------------- #
-# 3 · Columna `species`
-# --------------------------------------------------------------------------- #
-
-
-def add_species_column(df: pd.DataFrame) -> pd.DataFrame:
-    """Propaga la especie (categoría) a cada fila de producto."""
-    species_vals: List[str] = []
-    current: Optional[str] = None
-
-    for _, row in df.iterrows():
-        name = str(row["product_name"]).strip()
-        if SPECIES_PATTERN.match(name):
-            current = name.split("-")[0].strip().upper()
-            species_vals.append(None)   # placeholder; se eliminará
-        else:
-            species_vals.append(current)
-
-    df["species"] = species_vals
-    df = df[df["species"].notna()].reset_index(drop=True)
-    return df
-
-
-# --------------------------------------------------------------------------- #
-# 4 · Función principal
-# --------------------------------------------------------------------------- #
-
-
-def read_file(pdf: str | pathlib.Path) -> pd.DataFrame:
-    """
-    Procesa un PDF y devuelve un DataFrame limpio con la columna species.
-    """
-    tables = _read_tables(str(pdf))
-    std_tables = [t for t in (_standardize(x) for x in tables) if t is not None]
-    if not std_tables:
-        return pd.DataFrame()
-
-    df = pd.concat(std_tables, ignore_index=True)
-
-    # 1) Propaga species antes de filtrar cabeceras
-    df = add_species_column(df)
-
-    # 2) Elimina las filas-categoría ya procesadas
-    df = df[~df.apply(_is_header_row, axis=1)].reset_index(drop=True)
-    df.dropna(how="all", inplace=True)
-
-    # Metadatos por archivo
-    df["plant_location"] = extract_plant_location(pdf)
-    df["date_inserted"] = extract_effective_date(pdf)
-    df["source"] = pathlib.Path(pdf).name
-
-    df = _fix_numeric(df)
-
-    return df[
-        [*COLUMN_NAMES, "plant_location", "date_inserted", "source", "species"]
-    ]
-
-
-# --------------------------------------------------------------------------- #
-# 5 · Prueba rápida
-# --------------------------------------------------------------------------- #
-
-if __name__ == "__main__":
-    demo = read_file("2024.10.07 Statesville.pdf")
-    print(demo[["product_name", "species"]].head(25))
+[INFO] Proceso completado para todos los PDFs.
