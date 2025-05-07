@@ -1,28 +1,45 @@
 # --------------------------------------------------------------------------- #
-# 8. Filtro para descartar filas vacías / desfasadas
+# 9. Categorías  →  columna «species»
 # --------------------------------------------------------------------------- #
-def _is_valid_product(row: pd.Series) -> bool:
+_TITLE_RE = re.compile(r"^[A-Z][A-Z\s/&-]{2,}$")   # Solo letras, espacios y guiones
+
+def add_species_column(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Una fila es válida si:
-    • product_number empieza con dígito,  **y**
-    • list_price (o al menos un precio) no es NaN
+    Propaga el encabezado de sección a 'species' y
+    elimina las filas-título, sin importar si cayó en
+    product_number o product_name.
     """
-    pn_ok = pd.notna(row["product_number"]) and str(row["product_number"]).strip()[:1].isdigit()
-    price_ok = pd.notna(row["list_price"])
-    return pn_ok and price_ok
+    df["species"] = None
+    current = None
+    drop = []
 
+    price_cols = [
+        "list_price",
+        "full_pallet_price",
+        "half_load_full_pallet_price",
+        "full_load_full_pallet_price",
+        "full_load_best_price",
+    ]
 
+    for i, row in df.iterrows():
+        # Texto en las dos primeras columnas (puede venir en cualquiera)
+        first_txt  = str(row["product_number"]).strip().upper() if pd.notna(row["product_number"]) else ""
+        second_txt = str(row["product_name"]).strip().upper()   if pd.notna(row["product_name"])   else ""
 
+        title_txt = first_txt if _TITLE_RE.match(first_txt) else (
+                    second_txt if _TITLE_RE.match(second_txt) else "")
 
+        # Tiene precios (>0)  →  es producto real
+        has_price = any(pd.notna(row[c]) and row[c] not in (0, 0.0) for c in price_cols)
 
+        is_title = bool(title_txt) and not has_price
 
+        if is_title:
+            current = title_txt                      # guarda título
+            drop.append(i)                           # marca para borrar
+        else:
+            df.at[i, "species"] = current            # propaga título
 
-# 0) Propaga species
-df = add_species_column(df)
-
-# 1) Descarta filas “título” que quedaron chuecas / sin precios
-df = df[df.apply(_is_valid_product, axis=1)].reset_index(drop=True)
-
-# 2) Ahora sí, limpia cabeceras sueltas de página
-df = df[~df.apply(_is_header_row, axis=1)].reset_index(drop=True)
-df.dropna(how="all", inplace=True)
+    df.drop(index=drop, inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    return df
