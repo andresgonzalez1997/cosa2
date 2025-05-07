@@ -1,130 +1,218 @@
-[1/1] Procesando: 2025.03.03 Statesville.pdf
-Got stderr: May 07, 2025 6:46:02 AM org.apache.pdfbox.pdmodel.font.PDTrueTypeFont <init>
-WARNING: Using fallback font 'LiberationSans' for 'ArialMT'
+"""
+Purina horizontal PDF  →  DataFrame (20 columnas)
+-------------------------------------------------
+• Detecta la categoría (AQUACULTURE, CATTLE – …) y la propaga a `species`
+• Elimina cabeceras de página / fragmentos y filas vacías
+• Añade metadatos: plant_location, date_inserted, source
+"""
 
-Got stderr: May 07, 2025 6:46:06 AM org.apache.pdfbox.pdmodel.font.PDTrueTypeFont <init>
-WARNING: Using fallback font 'LiberationSans' for 'ArialMT'
+from __future__ import annotations
+import datetime as dt
+import pathlib
+import re
+from typing import List, Optional, Union
 
-[DEBUG] Columnas del DF tras parsear:
- ['product_number', 'formula_code', 'product_name', 'product_form', 'unit_weight', 'pallet_quantity', 'stocking_status', 'min_order_quantity', 'days_lead_time', 'fob_or_dlv', 'price_change', 'list_price', 'full_pallet_price', 'half_load_full_pallet_price', 'full_load_full_pallet_price', 'full_load_best_price', 'plant_location', 'date_inserted', 'source', 'species']
-  product_number formula_code             product_name product_form  \
-0            NaN          NaN                      NaN          NaN   
-1           5555         5D03   AQUAMAX FINGERLING 300     EXTRUDED   
-2           5554         5D02  AQUAMAX FRY STARTER 200     EXTRUDED   
-3           1470         5D09   AQUAMAX POND FISH 4000     EXTRUDED   
-4          45303         5D05    AQUAMAX SPORTFISH 500     EXTRUDED   
+import pandas as pd
+import tabula
+from PyPDF2 import PdfReader
 
-  unit_weight  pallet_quantity stocking_status  min_order_quantity  \
-0         NaN              NaN             NaN                 NaN   
-1    50.00 LB             40.0              SO                 0.0   
-2    50.00 LB             40.0              SO                 0.0   
-3    50.00 LB             40.0              SO                 0.0   
-4    50.00 LB             40.0              SO                 0.0   
+# --------------------------------------------------------------------------- #
+# 1. Columnas estándar del PDF
+# --------------------------------------------------------------------------- #
+COLUMN_NAMES: List[str] = [
+    "product_number",
+    "formula_code",
+    "product_name",
+    "product_form",
+    "unit_weight",
+    "pallet_quantity",
+    "stocking_status",
+    "min_order_quantity",
+    "days_lead_time",
+    "fob_or_dlv",
+    "price_change",
+    "list_price",
+    "full_pallet_price",
+    "half_load_full_pallet_price",
+    "full_load_full_pallet_price",
+    "full_load_best_price",
+]
 
-   days_lead_time           fob_or_dlv  price_change  list_price  \
-0             NaN  Price in US Dollars           NaN         NaN   
-1             5.0                  DLV          0.00       96.09   
-2             5.0                  DLV          0.00      101.66   
-3             5.0                  DLV          0.35       39.74   
-4             5.0                  DLV          0.38       50.71   
+NUMERIC_COLS = [
+    "pallet_quantity",
+    "min_order_quantity",
+    "days_lead_time",
+    "price_change",
+    "list_price",
+    "full_pallet_price",
+    "half_load_full_pallet_price",
+    "full_load_full_pallet_price",
+    "full_load_best_price",
+]
 
-   full_pallet_price  half_load_full_pallet_price  \
-0                NaN                          NaN   
-1              96.09                        95.84   
-2             101.66                       101.41   
-3              39.74                        39.49   
-4              50.71                        50.46   
+# --------------------------------------------------------------------------- #
+# 2. Metadatos (fecha efectiva y planta)
+# --------------------------------------------------------------------------- #
+_DATE_PAT = re.compile(r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*Effective\s*Date", re.I)
 
-   full_load_full_pallet_price  full_load_best_price  plant_location  \
-0                          NaN                   NaN  STATESVILLE NC   
-1                        95.59                 92.72  STATESVILLE NC   
-2                       101.16                 98.13  STATESVILLE NC   
-3                        39.24                 38.06  STATESVILLE NC   
-4                        50.21                 48.70  STATESVILLE NC   
 
-  date_inserted                      source        species  
-0                2025.03.03 Statesville.pdf           None  
-1                2025.03.03 Statesville.pdf  FORMULA\rCODE  
-2                2025.03.03 Statesville.pdf  FORMULA\rCODE  
-3                2025.03.03 Statesville.pdf  FORMULA\rCODE  
-4                2025.03.03 Statesville.pdf  FORMULA\rCODE  
-[DEBUG] Columnas tras set_column_types:
- ['product_number', 'formula_code', 'product_name', 'product_form', 'unit_weight', 'pallet_quantity', 'stocking_status', 'min_order_quantity', 'days_lead_time', 'fob_or_dlv', 'price_change', 'list_price', 'full_pallet_price', 'half_load_full_pallet_price', 'full_load_full_pallet_price', 'full_load_best_price', 'plant_location', 'date_inserted', 'source', 'species']
-[INFO] DataFrame shape: (269, 20)
-  product_number formula_code             product_name product_form  \
-0           <NA>         <NA>                     <NA>         <NA>   
-1           5555         5D03   AQUAMAX FINGERLING 300     EXTRUDED   
-2           5554         5D02  AQUAMAX FRY STARTER 200     EXTRUDED   
-3           1470         5D09   AQUAMAX POND FISH 4000     EXTRUDED   
-4          45303         5D05    AQUAMAX SPORTFISH 500     EXTRUDED   
-5           1468         5D06    AQUAMAX SPORTFISH 600     EXTRUDED   
-6    3003410-706         5D6R    AQUAMAX SPORTFISH MVP     EXTRUDED   
-7           1363         52C1           GAME FISH CHOW     EXTRUDED   
-8          40967         51J2        PURINA CATFISH 32     EXTRUDED   
-9    3002460-634         31BB   AR BLOCK 200LB PLASTIC       LIQUID   
+def extract_effective_date(pdf: Union[str, pathlib.Path]) -> str:
+    txt = PdfReader(str(pdf)).pages[0].extract_text()
+    m = _DATE_PAT.search(txt)
+    if not m:
+        return ""
+    raw = m.group(1)
+    sep = "/" if "/" in raw else "-"
+    mm, dd, yy = raw.split(sep)
+    yy = "20" + yy if len(yy) == 2 else yy
+    return f"{mm}{sep}{dd}{sep}{yy}"
 
-  unit_weight  pallet_quantity stocking_status  min_order_quantity  \
-0        <NA>              NaN            <NA>                 NaN   
-1    50.00 LB             40.0              SO                 0.0   
-2    50.00 LB             40.0              SO                 0.0   
-3    50.00 LB             40.0              SO                 0.0   
-4    50.00 LB             40.0              SO                 0.0   
-5    50.00 LB             40.0              SO                 0.0   
-6    50.00 LB             40.0              SO                 0.0   
-7    50.00 LB             40.0              SO                 0.0   
-8    50.00 LB             40.0              SO                 0.0   
-9   200.00 LB             10.0              SO                 0.0   
 
-   days_lead_time           fob_or_dlv  price_change  list_price  \
-0             NaN  Price in US Dollars           NaN         NaN   
-1             5.0                  DLV          0.00       96.09   
-2             5.0                  DLV          0.00      101.66   
-3             5.0                  DLV          0.35       39.74   
-4             5.0                  DLV          0.38       50.71   
-5             5.0                  DLV          0.38       50.71   
-6             5.0                  DLV          0.37       51.29   
-7             5.0                  DLV          0.18       34.41   
-8             5.0                  DLV          0.12       31.94   
-9             5.0                  DLV          1.50      105.05   
+def extract_plant_location(pdf: Union[str, pathlib.Path]) -> str:
+    try:
+        tbl = tabula.read_pdf(
+            pdf,
+            pages=1,
+            area=[0, 650, 60, 1000],
+            lattice=False,
+            guess=False,
+            pandas_options={"header": None, "dtype": str},
+        )[0]
+        text = " ".join(tbl.fillna("").values.flatten())
+        m = re.search(r"-\s*([A-Za-z &.\-]+?)\s+([A-Za-z]{2})\b", text)
+        return f"{m.group(1).strip().upper()} {m.group(2).upper()}" if m else ""
+    except Exception:
+        return ""
 
-   full_pallet_price  half_load_full_pallet_price  \
-0                NaN                          NaN   
-1              96.09                        95.84   
-2             101.66                       101.41   
-3              39.74                        39.49   
-4              50.71                        50.46   
-5              50.71                        50.46   
-6              51.29                        51.04   
-7              34.41                        34.16   
-8              31.94                        31.69   
-9             105.05                       104.05   
+# --------------------------------------------------------------------------- #
+# 3. Lectura de tablas
+# --------------------------------------------------------------------------- #
+def _read_tables(pdf: str):
+    return tabula.read_pdf(
+        pdf,
+        pages="all",
+        lattice=True,
+        guess=False,
+        pandas_options={"header": None, "dtype": str},
+    )
 
-   full_load_full_pallet_price  full_load_best_price  plant_location  \
-0                          NaN                   NaN  STATESVILLE NC   
-1                        95.59                 92.72  STATESVILLE NC   
-2                       101.16                 98.13  STATESVILLE NC   
-3                        39.24                 38.06  STATESVILLE NC   
-4                        50.21                 48.70  STATESVILLE NC   
-5                        50.21                 48.70  STATESVILLE NC   
-6                        50.79                 49.27  STATESVILLE NC   
-7                        33.91                 32.89  STATESVILLE NC   
-8                        31.44                 30.50  STATESVILLE NC   
-9                       103.05                 99.96  STATESVILLE NC   
+# --------------------------------------------------------------------------- #
+# 4. Normalizar tabla → 16 columnas
+# --------------------------------------------------------------------------- #
+def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
+    if tbl.shape[1] < 16:
+        return None
+    core = tbl.iloc[:, -16:].copy()
+    core.columns = COLUMN_NAMES
+    return core
 
-  date_inserted                      source       species  
-0                2025.03.03 Statesville.pdf          <NA>  
-CODE  
-CODE  
-CODE  
-CODE  
-CODE  
-CODE  
-CODE  
-CODE  
-CODE  
-[DEBUG] Nombre base para la tabla temporal: 2025_03_03_statesville
-uploading data to comp_price_horizontal_files
-export_data_to_parquet_file
-upload_parquet_file_to_hdfs
-upload_parquet_file_to_hdfs done.
-create_temp_table_from_parquet_file
+# --------------------------------------------------------------------------- #
+# 5. Propagar categoría   →  species
+# --------------------------------------------------------------------------- #
+_TITLE_RE = re.compile(r"^[A-Z][A-Z\s/&\-]{4,}$")   # ≥4 caracteres, solo mayúsculas
+
+
+def _add_species(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Fila-título: primera celda MAYÚSCULAS, ≤2 celdas no vacías,
+    suma de precios == 0/NaN.
+    """
+    price_cols = [
+        "list_price", "full_pallet_price",
+        "half_load_full_pallet_price", "full_load_full_pallet_price",
+        "full_load_best_price",
+    ]
+
+    def first_text(row):
+        for v in row:
+            t = str(v).strip()
+            if t:
+                return t
+        return ""
+
+    first = df.apply(first_text, axis=1)
+    non_empty = df.apply(lambda r: r.astype(str).str.strip().ne("").sum(), axis=1)
+    price_sum = (
+        df[price_cols]
+        .fillna(0)
+        .apply(pd.to_numeric, errors="coerce")
+        .sum(axis=1)
+    )
+
+    is_title = first.str.fullmatch(_TITLE_RE).fillna(False) & (non_empty <= 2) & (price_sum == 0)
+
+    df["species"] = None
+    df.loc[is_title, "species"] = first[is_title]
+    df["species"] = df["species"].ffill()
+
+    return df[~is_title].reset_index(drop=True)
+
+# --------------------------------------------------------------------------- #
+# 6. Filtrar cabeceras de página / fragmentos
+# --------------------------------------------------------------------------- #
+_HEADER_TOKENS = {"PRODUCT", "FORM", "UNIT", "WEIGHT", "PALLET", "STOCKING", "STATUS"}
+
+
+def _is_header(row: pd.Series) -> bool:
+    combined = " ".join(row.astype(str)).upper()
+    first = str(row.iloc[0]).strip()
+    if first and not first[0].isdigit():
+        if any(tok in combined for tok in _HEADER_TOKENS):
+            return True
+    return False
+
+# --------------------------------------------------------------------------- #
+# 7. Conversión numérica segura
+# --------------------------------------------------------------------------- #
+def _to_float(x):
+    if pd.isna(x):
+        return None
+    s = str(x).replace(",", "").strip()
+    sign = -1 if s.endswith("-") or (s.startswith("(") and s.endswith(")")) else 1
+    s = s.strip("()- ")
+    try:
+        return float(s) * sign
+    except ValueError:
+        return None
+
+
+def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    for col in NUMERIC_COLS:
+        df[col] = df[col].apply(_to_float)
+    return df
+
+# --------------------------------------------------------------------------- #
+# 8. read_file principal
+# --------------------------------------------------------------------------- #
+def read_file(pdf: Union[str, pathlib.Path]) -> pd.DataFrame:
+    tables = _read_tables(str(pdf))
+    std_tables = [t for t in (_standardize(x) for x in tables) if t is not None]
+    if not std_tables:
+        return pd.DataFrame()
+
+    df = pd.concat(std_tables, ignore_index=True)
+
+    # 1) Categoría → species
+    df = _add_species(df)
+
+    # 2) Cabeceras repetidas
+    df = df[~df.apply(_is_header, axis=1)].reset_index(drop=True)
+    df.dropna(how="all", inplace=True)
+
+    # 3) Metadatos
+    df["plant_location"] = extract_plant_location(pdf)
+    df["date_inserted"] = extract_effective_date(pdf)
+    df["source"] = pathlib.Path(pdf).name
+
+    df = _fix_numeric(df)
+    return df[[*COLUMN_NAMES, "plant_location", "date_inserted", "source", "species"]]
+
+# --------------------------------------------------------------------------- #
+# 9. Prueba rápida
+# --------------------------------------------------------------------------- #
+if __name__ == "__main__":
+    import sys
+    pdf_path = sys.argv[1]
+    frame = read_file(pdf_path)
+    print(frame.head())
+    print("Species únicas:", frame["species"].dropna().unique()[:10])
