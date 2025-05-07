@@ -1,6 +1,20 @@
-def _extract_first_match(patterns: List[str], text: str) -> Optional[str]:
-    for pat in patterns:
-        m = re.search(pat, text)
-        if m:
-            return m.group(1)
-    return None
+mportError: cannot import name 'Final' from 'typing' (/usr/local/lib/python3.7/typing.py)
+ImportError                               Traceback (most recent call last)
+/tmp/ipykernel_113/4046556454.py in <module>
+----> 1 import competitor_data.purina_file_horizontal as pfh
+
+~/competitor_data/__init__.py in <module>
+----> 1 import competitor_data.purina_file_horizontal as purina
+      2 
+      3 def get_purina_price_list(file_path):
+      4     return purina.read_file(file_path)
+      5 
+
+~/competitor_data/purina_file_horizontal.py in <module>
+     13 import re
+     14 from datetime import datetime
+---> 15 from typing import Final, List, Optional
+     16 
+     17 import numpy as np
+
+ImportError: cannot import name 'Final' from 'typing' (/usr/local/lib/python3.7/typing.py)
