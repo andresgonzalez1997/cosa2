@@ -3,32 +3,29 @@
 # --------------------------------------------------------------------------- #
 def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
     """
-    • Recorta a 16 columnas estándar.
-    • Si la tabla viene con 17 columnas (la 1.ª es el encabezado de sección),
-      copia ese texto a la columna «product_name» SOLO en las filas-categoría
-      y luego descarta la columna extra.
+    Ajusta a las 16 columnas estándar **sin perder el título de sección**.
+
+    - Si el PDF trae 16 columnas → solo renombro.
+    - Si trae ≥17 columnas → copio la 1.ª columna a product_name
+      **solo en la fila-título** y luego me quedo con las últimas 16.
     """
-    # Demasiado corta → descartar
-    if tbl.shape[1] < 16:
+    if tbl.shape[1] < 16:               # tabla demasiado rota
         return None
 
+    # --- Caso ≥17 columnas -------------------------------------------------
     if tbl.shape[1] >= 17:
-        # Conservar la 1.ª col. (posible categoría) antes de recortar
-        first_col  = tbl.iloc[:, 0]
-        core       = tbl.iloc[:, 1:17].copy()          # ← las 16 columnas de datos
-        core.columns = COLUMN_NAMES                    # nombra columnas estándar
+        first_col = tbl.iloc[:, 0]      # posible título
+        core      = tbl.iloc[:, -16:].copy()   # 16 derechas = datos reales
+        core.columns = COLUMN_NAMES
 
-        # Fila-categoría si la 2.ª col. (formula_code) está vacía
-        cat_mask = core["formula_code"].isna() & first_col.notna()
-
-        # Copia el texto de la categoría a «product_name»
-        core.loc[cat_mask, "product_name"] = (
-            first_col.loc[cat_mask]
-            .astype(str)
-            .str.replace(",", "")
-            .str.strip()
+        # fila-título: formula_code NaN  y first_col no vacío
+        hdr_mask = core["formula_code"].isna() & first_col.notna()
+        core.loc[hdr_mask, "product_name"] = (
+            first_col.loc[hdr_mask]
+            .astype(str).str.replace(",", "").str.strip()
         )
         tbl = core
+    # --- Caso exacto de 16 columnas ---------------------------------------
     else:
         tbl = tbl.iloc[:, :16]
         tbl.columns = COLUMN_NAMES
@@ -36,31 +33,18 @@ def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
     return tbl
 
 
-
-
-
-
-
-
-
-
-
-
-
 # --------------------------------------------------------------------------- #
 # 9. Categorías  →  columna «species»
 # --------------------------------------------------------------------------- #
 def add_species_column(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Detecta las filas-categoría (AQUACULTURE, CATTLE - …, etc.),
-    copia ese texto en la nueva columna «species» para las filas de producto
-    y elimina las propias filas-categoría.
+    Propaga el título de sección a la nueva columna 'species'
+    y descarta las filas-título.
     """
     df["species"] = None
-    current_species = None
-    drop_idx = []
+    current = None
+    drop = []
 
-    # Columnas de precio (si tienen número, la fila es de producto)
     price_cols = [
         "list_price",
         "full_pallet_price",
@@ -69,18 +53,24 @@ def add_species_column(df: pd.DataFrame) -> pd.DataFrame:
         "full_load_best_price",
     ]
 
-    for idx, row in df.iterrows():
-        has_prices   = any(pd.notna(row[c]) for c in price_cols)
-        name_field   = str(row["product_name"]).strip() if pd.notna(row["product_name"]) else ""
+    for i, row in df.iterrows():
+        # fila-producto SI tiene algún precio > 0
+        has_price = any(pd.notna(row[c]) and row[c] not in (0, 0.0) for c in price_cols)
+        name_txt  = str(row["product_name"]).strip() if pd.notna(row["product_name"]) else ""
 
-        # Fila-categoría: texto válido en «product_name» y SIN precios
-        if name_field and not name_field[0].isdigit() and not has_prices:
-            current_species = name_field.upper()
-            drop_idx.append(idx)
+        is_header = (
+            name_txt
+            and not name_txt[0].isdigit()     # no inicia con número
+            and not has_price                 # sin precios
+            and pd.isna(row["formula_code"])  # sin fórmula
+        )
+
+        if is_header:
+            current = name_txt.upper()
+            drop.append(i)
         else:
-            df.at[idx, "species"] = current_species
+            df.at[i, "species"] = current
 
-    # Elimina filas-categoría y re-indexa
-    df.drop(index=drop_idx, inplace=True)
+    df.drop(index=drop, inplace=True)
     df.reset_index(drop=True, inplace=True)
     return df
