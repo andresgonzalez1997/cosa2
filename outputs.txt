@@ -1,11 +1,28 @@
-[DEBUG] Nombre base para la tabla temporal: 2025_03_03_statesville
-uploading data to comp_price_horizontal_files
-export_data_to_parquet_file
-upload_parquet_file_to_hdfs
-upload_parquet_file_to_hdfs done.
-create_temp_table_from_parquet_file
-[DEBUG] Columns in temp table comp_price_horizontal_files_2025_03_03_statesville after creation: [('product_number', 'string'), ('formula_code', 'string'), ('product_name', 'string'), ('product_form', 'string'), ('unit_weight', 'string'), ('pallet_quantity', 'double'), ('stocking_status', 'string'), ('min_order_quantity', 'double'), ('days_lead_time', 'double'), ('fob_or_dlv', 'string'), ('price_change', 'double'), ('list_price', 'double'), ('full_pallet_price', 'double'), ('half_load_full_pallet_price', 'double'), ('full_load_full_pallet_price', 'double'), ('full_load_best_price', 'double'), ('plant_location', 'string'), ('date_inserted', 'string'), ('source', 'string')]
-#########################################################################
-temp table created from parquet file.
-[DEBUG] column_def for temp table: product_number,formula_code,product_name,product_form,unit_weight,pallet_quantity,stocking_status,min_order_quantity,days_lead_time,fob_or_dlv,price_change,list_price,full_pallet_price,half_load_full_pallet_price,full_load_full_pallet_price,full_load_best_price,plant_location,date_inserted,source
-#########################################################################
+# --------------------------------------------------------------------------- #
+# 8. Filtro para descartar filas vacías / desfasadas
+# --------------------------------------------------------------------------- #
+def _is_valid_product(row: pd.Series) -> bool:
+    """
+    Una fila es válida si:
+    • product_number empieza con dígito,  **y**
+    • list_price (o al menos un precio) no es NaN
+    """
+    pn_ok = pd.notna(row["product_number"]) and str(row["product_number"]).strip()[:1].isdigit()
+    price_ok = pd.notna(row["list_price"])
+    return pn_ok and price_ok
+
+
+
+
+
+
+
+# 0) Propaga species
+df = add_species_column(df)
+
+# 1) Descarta filas “título” que quedaron chuecas / sin precios
+df = df[df.apply(_is_valid_product, axis=1)].reset_index(drop=True)
+
+# 2) Ahora sí, limpia cabeceras sueltas de página
+df = df[~df.apply(_is_header_row, axis=1)].reset_index(drop=True)
+df.dropna(how="all", inplace=True)
