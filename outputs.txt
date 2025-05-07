@@ -1,36 +1,44 @@
-def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
+# --------------------------------------------------------------------------- #
+# 9. Categorías  →  columna «species»
+# --------------------------------------------------------------------------- #
+def add_species_column(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Recorta a 16 columnas y corrige desplazamientos (17 columnas),
-    **sin perder la columna-categoría** para que luego
-    `add_species_column()` la propague.
+    Identifica filas-categoría (AQUACULTURE, CATTLE – …, etc.),
+    propaga ese valor a la nueva columna «species» y luego elimina
+    las filas-categoría del DataFrame.
     """
-    # Demasiado corta → descartar.
-    if tbl.shape[1] < 16:
-        return None
+    df["species"] = None
+    current_species = None
+    drop_idx = []
 
-    if tbl.shape[1] >= 17:
-        # ── A ── Detectamos, fila a fila, si la 1.ª columna es categoría
-        header_col = tbl.iloc[:, 0]
-        second_col = tbl.iloc[:, 1]
+    # Columnas *numéricas* para comprobar que la fila no trae precios
+    price_cols = [
+        "list_price",
+        "full_pallet_price",
+        "half_load_full_pallet_price",
+        "full_load_full_pallet_price",
+        "full_load_best_price",
+    ]
 
-        # Fila de producto si la segunda columna empieza con dígito
-        product_mask = second_col.astype(str).str.strip().str[0].str.isdigit()
+    for idx, row in df.iterrows():
+        # 1) ¿Fila-categoría?
+        is_numeric_row = any(pd.notna(row[c]) for c in price_cols)
+        is_text_only   = pd.notna(row["product_desc"]) and not is_numeric_row
 
-        # Copiamos tabla “core” (16 cols) tomando 1:17 como siempre
-        core = tbl.iloc[:, 1:17].copy()
+        if is_text_only:
+            # Guarda la categoría en mayúsculas, sin dobles espacios
+            current_species = (
+                str(row["product_desc"])
+                .replace(",", "")
+                .replace("-", "-")
+                .strip()
+                .upper()
+            )
+            drop_idx.append(idx)
+        else:
+            df.at[idx, "species"] = current_species  # Propaga
 
-        # En filas de CATEGORÍA movemos el texto de la 1.ª columna
-        # a la que luego será «product_desc» (índice 2 después del recorte)
-        core.loc[~product_mask, core.columns[2]] = (
-            header_col.loc[~product_mask]
-            .astype(str)
-            .str.replace(r",", "", regex=True)  # limpia comas
-            .str.strip()
-        )
-        tbl = core
-    else:
-        # Caso normal de 16 columnas
-        tbl = tbl.iloc[:, :16]
-
-    tbl.columns = COLUMN_NAMES
-    return tbl
+    # 2) Limpia las filas de categoría
+    df.drop(index=drop_idx, inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    return df
