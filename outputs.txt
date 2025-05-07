@@ -1,166 +1,29 @@
-"""
-Purina horizontal price-list reader (Python 3.7).
+Got stderr: May 07, 2025 9:10:22 PM org.apache.pdfbox.pdmodel.font.PDTrueTypeFont <init>
+WARNING: Using fallback font 'LiberationSans' for 'ArialMT'
 
-• Keeps original extraction logic (lattice, ≥10-column tables).
-• Preserves one-column section headers long enough to create the new
-  ‘species’ column, then drops them.
-• Robust numeric conversion — bad tokens become NaN (no ValueError).
-"""
-
-from __future__ import annotations
-import pathlib, re
-from datetime import datetime
-from typing import List, Optional
-
-import numpy as np
-import pandas as pd
-import tabula
-
-
-# ────────────────────────── 1. Static config ───────────────────────────────
-COLUMN_NAMES = [
-    "product_number", "formula_code", "product_name", "product_form",
-    "unit_weight", "pallet_quantity", "stocking_status", "min_order_quantity",
-    "days_lead_time", "fob_or_dlv", "price_change", "list_price",
-    "full_pallet_price", "full_load_best_price",
-]
-
-TABULA_OPTIONS = dict(pages="all", lattice=True, guess=False, area=None, columns=None)
-
-_SPECIES_RX = re.compile(
-    r"^\s*(AQUACULTURE|CATTLE|GOAT|SHEEP|SWINE|POULTRY)", re.IGNORECASE
-)
-
-_DATE_RXS = [
-    r"(\d{2}/\d{2}/\d{4})", r"(\d{4}\.\d{2}\.\d{2})", r"(\d{2}-\d{2}-\d{4})"
-]
-
-
-# ────────────────────────── 2. Helper functions ────────────────────────────
-def _read_tables(pdf: str):
-    return tabula.read_pdf(pdf, **TABULA_OPTIONS)
-
-
-def _standardize(df: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """
-    • Keep 1-col header rows so we can read species.
-    • Keep data tables with ≥10 cols (original rule).
-    • Discard anything else.
-    """
-    if df.empty:
-        return None
-
-    first_cell = str(df.iloc[0, 0]).strip()
-
-    # Header row  → convert to placeholder with same width
-    if df.shape[1] == 1 and _SPECIES_RX.match(first_cell):
-        hdr = pd.DataFrame({"product_name": [first_cell]})
-        for col in COLUMN_NAMES:
-            if col not in hdr.columns:
-                hdr[col] = np.nan
-        return hdr[COLUMN_NAMES]
-
-    # Data table must have at least 10 cols (your original cutoff)
-    if df.shape[1] < 10:
-        return None
-
-    # Pad & rename to match COLUMN_NAMES
-    df.columns = [f"col_{i}" for i in range(df.shape[1])]
-    while df.shape[1] < len(COLUMN_NAMES):
-        df[f"col_{df.shape[1]}"] = np.nan
-    df = df.iloc[:, : len(COLUMN_NAMES)]
-    df.columns = COLUMN_NAMES
-    return df
-
-
-def _is_header_row(row: pd.Series) -> bool:
-    return bool(_SPECIES_RX.match(str(row["product_name"]).strip()))
-
-
-def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
-    """Convert numeric columns; non-numeric tokens → NaN (no crash)."""
-    numeric = [
-        "unit_weight", "pallet_quantity", "min_order_quantity",
-        "days_lead_time", "price_change", "list_price",
-        "full_pallet_price", "full_load_best_price",
-    ]
-    for col in numeric:
-        df[col] = pd.to_numeric(
-            df[col]
-              .astype(str)
-              .str.replace(",", "", regex=False)
-              .replace({"": np.nan, "nan": np.nan}),
-            errors="coerce"         # <- crucial: bad strings → NaN
-        )
-    return df
-
-
-def _extract_first_match(rxs: List[str], text: str) -> Optional[str]:
-    for pat in rxs:
-        m = re.search(pat, text)
-        if m:
-            return m.group(1)
-    return None
-
-
-def _extract_effective_date(pdf: str | pathlib.Path) -> Optional[datetime]:
-    stem = pathlib.Path(pdf).stem
-    token = _extract_first_match(_DATE_RXS, stem)
-    if token:
-        for fmt in ("%m/%d/%Y", "%Y.%m.%d", "%d-%m-%Y"):
-            try:
-                return datetime.strptime(token, fmt)
-            except ValueError:
-                continue
-    return None
-
-
-def _extract_plant_location(pdf: str | pathlib.Path) -> str:
-    return pathlib.Path(pdf).stem.split()[-1].upper()
-
-
-def _add_species_column(df: pd.DataFrame) -> pd.DataFrame:
-    """Create & propagate the new ‘species’ column."""
-    current, out = None, []
-    for name in df["product_name"].astype(str):
-        m = _SPECIES_RX.match(name.strip())
-        if m:
-            current = m.group(1).upper()
-            out.append(None)      # header row → drop later
-        else:
-            out.append(current)
-    df["species"] = out
-    return df
-
-
-# ────────────────────────── 3. Main entry point ────────────────────────────
-def read_file(pdf: str | pathlib.Path) -> pd.DataFrame:
-    tables = _read_tables(str(pdf))
-    std = [t for t in (_standardize(x) for x in tables) if t is not None]
-    if not std:
-        return pd.DataFrame()     # unlikely with your PDFs
-
-    df = pd.concat(std, ignore_index=True)
-
-    df = _add_species_column(df)                          # propagate species
-    df = df[~df.apply(_is_header_row, axis=1)].reset_index(drop=True)
-    df.dropna(how="all", inplace=True)
-
-    # File-level metadata
-    df["plant_location"] = _extract_plant_location(pdf)
-    df["date_inserted"] = _extract_effective_date(pdf)
-    df["source"] = pathlib.Path(pdf).name
-
-    df = _fix_numeric(df)
-
-    return df[
-        [*COLUMN_NAMES, "plant_location", "date_inserted", "source", "species"]
-    ]
-
-
-# ────────────────────────── 4. Quick local test ────────────────────────────
-if __name__ == "__main__":
-    sample = "2025.03.03 Statesville.pdf"       # change path as needed
-    demo = read_file(sample)
-    print(demo[["product_name", "species"]].head(25))
-    print("Shape:", demo.shape)
+                     product_name species
+0                             NaN    None
+1                   PRODUCT DESC.    None
+2         AQUAMAX FRY STARTER 200    None
+3          AQUAMAX POND FISH 4000    None
+4           AQUAMAX SPORTFISH 500    None
+5           AQUAMAX SPORTFISH 600    None
+6           AQUAMAX SPORTFISH MVP    None
+7                  GAME FISH CHOW    None
+8               PURINA CATFISH 32    None
+9   AR BLOCK HI-FAT 200LB PLASTIC    None
+10             RL 30-13 TUB 225LB    None
+11           W+R AS 4 MN TB 125LB    None
+12      W+R AS 4 MN TB AVL4 225LB    None
+13          W+R MAG MIN TUB 225LB    None
+14  W+R MIN MAG TUB ALTOSID 225LB    None
+15         W+R SF AS 4 CP ALTOSID    None
+16                            NaN    None
+17                            NaN    None
+18                            NaN    None
+19                            NaN    None
+20                  PRODUCT DESC.    None
+21                W+R SF HMG 4 CP    None
+22        W+R SF HMG 4 CP ALTOSID    None
+23       PRECON COMPLETE DX 00187    None
+24         4SQ STK/GR 14 TEXTURED    None
