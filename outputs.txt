@@ -1,32 +1,28 @@
-PURINA_HORIZONTAL_FILES:
 """
-Lectura y limpieza de PDFs.
+Lectura y limpieza de PDFs Purina (horizontal).
 
-• Conservar la primera línea real de datos de cada página.
-• Eliminar cabeceras repetidas ("PRODUCT NUMBER …"), fragmentos ("MIN / DAYS")
-  y textos sueltos como "Price / Unit" o "Price in US Dollars".
-• Corrige números negativos (100‑  →  ‑100) y añadir metadatos (fecha, planta, source)
-• Se usa la función pública: df = read_file("pdf_file") la cual devuelve un DataFrame
-  con 19 columnas estándar, listo para cargar.
+Devuelve un DataFrame con 20 columnas:
+16 de datos + plant_location + date_inserted + source + species
 """
 from __future__ import annotations
 import datetime as _dt
 import pathlib
 import re
-from typing import List, Optional
+from typing import List, Optional, Union
+
 from PyPDF2 import PdfReader
 import pandas as pd
 import tabula
 
 # --------------------------------------------------------------------------- #
-# 1. Nombres estándar (16 columnas del PDF original)
+# 1. Columnas estándar extraídas del PDF
 # --------------------------------------------------------------------------- #
 COLUMN_NAMES: List[str] = [
-    "product_number", 
-    "formula_code", 
-    "product_name", 
+    "product_number",
+    "formula_code",
+    "product_name",
     "product_form",
-    "unit_weight", 
+    "unit_weight",
     "pallet_quantity",
     "stocking_status",
     "min_order_quantity",
@@ -40,168 +36,114 @@ COLUMN_NAMES: List[str] = [
     "full_load_best_price",
 ]
 
-# --------------------------------------------------------------------------- #
-# 2. Columnas numéricas que se convertirán a float (Para evitar errores de tipado)
-# --------------------------------------------------------------------------- #
-# «pallet_quantity», «min_order_quantity» y «days_lead_time» salen como int64;
-# se fuerzan a float evitamos el error de esquema Incompatible Parquet/Impala.
+# Columnas que deben ser numéricas (float) al final
 NUMERIC_COLS: List[str] = [
-    "pallet_quantity", "min_order_quantity", "days_lead_time",
-] + COLUMN_NAMES[10:]  # todas las columnas de precios
-
-# --------------------------------------------------------------------------- #
-# 3. Regex de fecha y planta (metadatos)
-# --------------------------------------------------------------------------- #
-# DATE_RX = re.compile(r"\d{1,2}/\d{1,2}/(?:\d{4}|\d{2})")
-# LOC_RX = re.compile(r"\b(STATESVILLE|HUDSON'S|[A-Z ]+ NC)\b", re.I)
-
-# --------------------------------------------------------------------------- #
-# 4. Utilidades Tabula
-# --------------------------------------------------------------------------- #
-
-def _first_table(pdf: str | pathlib.Path, area) -> str:
-    try:
-        t = tabula.read_pdf(
-            pdf,
-            pages=1,
-            lattice=True,
-            guess=False,
-            area=area,
-            pandas_options={"header": None, "dtype": str},
-        )[0]
-        return " ".join(t.astype(str).values.ravel())
-    except Exception:
-        return ""
-
-
-# ------------------------------------------------------------------
-# FECHA EFECTIVA 
-# ------------------------------------------------------------------
-_DATE_PATTERNS = [
-    re.compile(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*Effective\s+Date', re.I),
-    re.compile(r'Effective\s+Date\s*[-–—]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', re.I),
+    "pallet_quantity",
+    "min_order_quantity",
+    "days_lead_time",
+    "price_change",
+    "list_price",
+    "full_pallet_price",
+    "half_load_full_pallet_price",
+    "full_load_full_pallet_price",
+    "full_load_best_price",
 ]
 
-def extract_effective_date(pdf_path: str | Path) -> _dt.date:
-    """
-    Devuelve la fecha efectiva sin importar si usa '/' o '-' y
-    si el año viene con 2 o 4 dígitos.
-    """
+# --------------------------------------------------------------------------- #
+# 2. Metadatos: fecha efectiva y planta
+# --------------------------------------------------------------------------- #
+_DATE_PATTERNS = [
+    re.compile(r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*Effective\s+Date", re.I),
+    re.compile(r"Effective\s+Date\s*[-–—]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})", re.I),
+]
+
+
+def extract_effective_date(pdf_path: Union[str, pathlib.Path]) -> _dt.date:
     reader = PdfReader(str(pdf_path))
-    first_page_text = reader.pages[0].extract_text()
-
-    # Busca la primera coincidencia con cualquiera de los dos patrones
+    txt = reader.pages[0].extract_text()
     for rx in _DATE_PATTERNS:
-        m = rx.search(first_page_text)
+        m = rx.search(txt)
         if m:
-            date_str = m.group(1)            # ej. '01-06-2025' o '01/06/25'
-
-            # Detecta separador               → '/' o '-'
-            sep = "/" if "/" in date_str else "-"
-            mm, dd, yy = date_str.split(sep)
-
-            # Normaliza año de 2 dígitos → 4 dígitos (20yy)
+            raw = m.group(1)
+            sep = "/" if "/" in raw else "-"
+            mm, dd, yy = raw.split(sep)
             if len(yy) == 2:
                 yy = "20" + yy
+            return _dt.datetime.strptime(f"{mm}{sep}{dd}{sep}{yy}", f"%m{sep}%d{sep}%Y").date()
+    raise ValueError("Effective Date not found")
 
-            # Arma de nuevo y convierte a date
-            return _dt.datetime.strptime(
-                f"{mm}{sep}{dd}{sep}{yy}", f"%m{sep}%d{sep}%Y"
-            ).date()
 
-    # Si llega aquí, no encontró la fecha
-    raise ValueError("No se encontró la fecha efectiva en el PDF.")
-    
-# -------------------------------------------------------------- #
-#  ▸  EXTRACT_PLANT_LOCATION  – final                            #
-# -------------------------------------------------------------- #
-def extract_plant_location(pdf_path: str | Path) -> str:
-    """
-    Extrae «PLANTA XX» de la cabecera de un PDF *horizontal*.
-    """
+def extract_plant_location(pdf_path: Union[str, pathlib.Path]) -> str:
     try:
-        # 1. Leer sólo la franja donde está la línea 1244-STATESVILLE NC WHS
         tables = tabula.read_pdf(
             pdf_path,
             pages=1,
-            area=[0, 650, 60, 1000],          # ← coordenadas embebidas
+            area=[0, 650, 60, 1000],
             lattice=False,
             guess=False,
             pandas_options={"header": None, "dtype": str},
         )
-
         if not tables:
-            return "PLANTA DESCONOCIDA"
-
-        # 2. Combinar toda la franja en un único string
+            return "UNKNOWN PLANT"
         text = " ".join(tables[0].fillna("").values.flatten())
-
-        # 3. Regex: guion + nombre + espacio + dos letras de estado
         m = re.search(r"-\s*([A-Za-z &.\-]+?)\s+([A-Za-z]{2})\b", text)
         if m:
             plant, state = m.groups()
             return f"{plant.strip().upper()} {state.upper()}"
-
-        return "PLANTA DESCONOCIDA"
-
+        return "UNKNOWN PLANT"
     except Exception:
-        return "PLANTA DESCONOCIDA"
+        return "UNKNOWN PLANT"
+
 # --------------------------------------------------------------------------- #
-# 5. Lectura de Tablas con Tabula
+# 3. Lectura de tablas con Tabula
 # --------------------------------------------------------------------------- #
-def _read_tables(pdf):
+def _read_tables(pdf_path: str):
     try:
         return tabula.read_pdf(
-            pdf,
+            pdf_path,
             pages="all",
             lattice=True,
             guess=False,
-            pandas_options={"dtype": str, "header": None},
+            pandas_options={"header": None, "dtype": str},
         )
     except Exception as exc:
         print("[tabula]", exc)
         return []
 
 # --------------------------------------------------------------------------- #
-# 6. Normalización de cada tabla extraída
+# 4. Normalización de cada tabla
 # --------------------------------------------------------------------------- #
 def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
     """
-    Ajusta a las 16 columnas estándar **sin perder el título de sección**.
-
-    - Si el PDF trae 16 columnas → solo renombro.
-    - Si trae ≥17 columnas → copio la 1.ª columna a product_name
-      **solo en la fila-título** y luego me quedo con las últimas 16.
+    Devuelve la tabla recortada a 16 columnas con nombres COLUMN_NAMES.
+    Si hay ≥17 columnas, asume que la 1ª puede ser la categoría y la copia
+    a product_name cuando la fila sea título.
     """
-    if tbl.shape[1] < 16:               # tabla demasiado rota
+    if tbl.shape[1] < 16:
         return None
 
-    # --- Caso ≥17 columnas -------------------------------------------------
     if tbl.shape[1] >= 17:
-        first_col = tbl.iloc[:, 0]      # posible título
-        core      = tbl.iloc[:, -16:].copy()   # 16 derechas = datos reales
+        first = tbl.iloc[:, 0]
+        core = tbl.iloc[:, -16:].copy()
         core.columns = COLUMN_NAMES
-
-        # fila-título: formula_code NaN  y first_col no vacío
-        hdr_mask = core["formula_code"].isna() & first_col.notna()
+        hdr_mask = core["formula_code"].isna() & first.notna()
         core.loc[hdr_mask, "product_name"] = (
-            first_col.loc[hdr_mask]
-            .astype(str).str.replace(",", "").str.strip()
+            first.loc[hdr_mask].astype(str).str.replace(",", "").str.strip()
         )
         tbl = core
-    # --- Caso exacto de 16 columnas ---------------------------------------
     else:
         tbl = tbl.iloc[:, :16]
         tbl.columns = COLUMN_NAMES
 
     return tbl
+
 # --------------------------------------------------------------------------- #
-# 7. Conversión numérica (puntual) – evita errores Parquet/Impala
+# 5. Conversión numérica segura
 # --------------------------------------------------------------------------- #
-def _to_float(s: str):
-    if pd.isna(s):
+def _to_float(x: str):
+    if pd.isna(x):
         return None
-    s = str(s).replace(",", "").strip()
+    s = str(x).replace(",", "").strip()
     sign = -1 if s.endswith("-") or (s.startswith("(") and s.endswith(")")) else 1
     s = s.strip("()- ")
     try:
@@ -217,503 +159,110 @@ def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 # --------------------------------------------------------------------------- #
-# 8. Filtro de filas‑cabecera / fragmentos
+# 6. Filtrado de filas-cabecera/fragmentos (igual a tu versión original)
 # --------------------------------------------------------------------------- #
 HEADER_TOKENS = {
-    "PRODUCT", 
-    "FORM", 
-    "UNIT", 
-    "WEIGHT", 
-    "PALLET", 
-    "MIN", 
-    "ORDER",  
-    "QUANTITY", 
-    "DAYS", 
-    "LEAD", 
-    "TIME", 
-    "STOCKING", 
-    "STATUS", 
-    "FOB", 
-    "DLV",
+    "PRODUCT", "FORM", "UNIT", "WEIGHT", "PALLET",
+    "MIN", "ORDER", "QUANTITY", "DAYS", "LEAD",
+    "TIME", "STOCKING", "STATUS", "FOB", "DLV",
 }
 
-PRICE_HEADER_PATTERNS = (
-    "PRICE / UNIT",
-    "PRICE IN US DOLLAR",
-    "PRICE IN US DOLLARS",
-    "MIN / DAYS"
-    "FORMULA CODE",
-    "MONTHLY",
-    "PAGE",  # "Page 2 of 13"
-)
-
-_PRICE_RE = re.compile("|".join(re.escape(p) for p in PRICE_HEADER_PATTERNS), re.I)
+_PRICE_HDR_RE = re.compile(r"(PRICE\s*/\s*UNIT|PRICE IN US DOLLAR|MIN\s*/\s*DAYS)", re.I)
 
 
 def _is_header_row(row: pd.Series) -> bool:
     combined = " ".join(row.astype(str)).upper()
-
-    if _PRICE_RE.search(combined):
+    if _PRICE_HDR_RE.search(combined):
         return True
 
     first = str(row.iloc[0]).strip().upper()
-
-    if "FORMULA" in combined and "PRODUCT" in combined:
-        return True
-
     if first and first[0].isdigit():
         return False
 
-    if first.startswith("PRODUCT") and str(row.iloc[1]).upper().startswith("FORMULA"):
+    if pd.isna(row["list_price"]) and any(tok in combined for tok in HEADER_TOKENS):
         return True
-
-    if pd.isna(row["list_price"]):
-        if any(tok in combined for tok in HEADER_TOKENS):
-            return True
-
     return False
 
-  
 # --------------------------------------------------------------------------- #
-# 9. Función para tomar las species
-# --------------------------------------------------------------------------- #  
-
-_TITLE_RE = re.compile(r"^[A-Z][A-Z\s/&-]{2,}$")   # Solo letras, espacios y guiones
-
+# 7. Propagar categoría → species
+# --------------------------------------------------------------------------- #
 def add_species_column(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Propaga el encabezado de sección a 'species' y
-    elimina las filas-título, sin importar si cayó en
-    product_number o product_name.
+    Identifica la fila-título (sin precios >0 y product_number no numérico),
+    propaga el texto a la columna `species` y elimina la fila-título.
     """
-    df["species"] = None
-    current = None
-    drop = []
-
     price_cols = [
-        "list_price",
-        "full_pallet_price",
-        "half_load_full_pallet_price",
-        "full_load_full_pallet_price",
+        "list_price", "full_pallet_price",
+        "half_load_full_pallet_price", "full_load_full_pallet_price",
         "full_load_best_price",
     ]
 
+    df["species"] = None
+    current = None
+    drop_idx = []
+
     for i, row in df.iterrows():
-        # Texto en las dos primeras columnas (puede venir en cualquiera)
-        first_txt  = str(row["product_number"]).strip().upper() if pd.notna(row["product_number"]) else ""
-        second_txt = str(row["product_name"]).strip().upper()   if pd.notna(row["product_name"])   else ""
+        price_sum = row[price_cols].apply(pd.to_numeric, errors="coerce").fillna(0).sum()
+        pn_txt = str(row["product_number"]).strip()
 
-        title_txt = first_txt if _TITLE_RE.match(first_txt) else (
-                    second_txt if _TITLE_RE.match(second_txt) else "")
-
-        # Tiene precios (>0)  →  es producto real
-        has_price = any(pd.notna(row[c]) and row[c] not in (0, 0.0) for c in price_cols)
-
-        is_title = bool(title_txt) and not has_price
-
+        is_title = (price_sum == 0) and (pn_txt == "" or not pn_txt[0].isdigit())
         if is_title:
-            current = title_txt                      # guarda título
-            drop.append(i)                           # marca para borrar
+            # Primer texto no vacío de la fila
+            title = next((str(v).strip() for v in row if str(v).strip()), "")
+            current = title.upper()
+            drop_idx.append(i)
         else:
-            df.at[i, "species"] = current            # propaga título
+            df.at[i, "species"] = current
 
-    df.drop(index=drop, inplace=True)
+    df.drop(index=drop_idx, inplace=True)
     df.reset_index(drop=True, inplace=True)
     return df
-  
+
 # --------------------------------------------------------------------------- #
-#  Filtro para descartar filas vacias
-# --------------------------------------------------------------------------- #  
+# 8. Filtro de filas producto válidas
+# --------------------------------------------------------------------------- #
 def _is_valid_product(row: pd.Series) -> bool:
-    """
-    Una fila es válida si:
-    • product_number empieza con dígito,  **y**
-    • list_price (o al menos un precio) no es NaN
-    """
     pn_ok = pd.notna(row["product_number"]) and str(row["product_number"]).strip()[:1].isdigit()
     price_ok = pd.notna(row["list_price"])
     return pn_ok and price_ok
-  
-# --------------------------------------------------------------------------- #
-# 10. Función principal
-# --------------------------------------------------------------------------- #
-def read_file(pdf: str | pathlib.Path) -> pd.DataFrame:
-    # Procesa un PDF y devuelve un DataFrame limpio y estandarizado.
-    tables = _read_tables(str(pdf))
 
-    # Normaliza cada tabla y descarta las vacías
-    std_tables = [t for t in (_standardize(x) for x in tables) if t is not None]
-    if not std_tables:
+# --------------------------------------------------------------------------- #
+# 9. Función principal
+# --------------------------------------------------------------------------- #
+def read_file(pdf: Union[str, pathlib.Path]) -> pd.DataFrame:
+    tables = _read_tables(str(pdf))
+    std = [t for t in (_standardize(x) for x in tables) if t is not None]
+    if not std:
         return pd.DataFrame()
 
-    df = pd.concat(std_tables, ignore_index=True)
-    
-    
-    # ------------------------------------------------------------------ #
-    # PARCHE ÚNICO para poblar la columna `species`                      #
-    # Detecta el encabezado donde sea que Tabula lo deje y lo propaga.   #
-    # ------------------------------------------------------------------ #
+    df = pd.concat(std, ignore_index=True)
 
-    TITLE_RE = re.compile(r"^[A-Z][A-Z\s/&\-]{2,}$")  # texto 100 % mayúsculas
-
-    # 1) Primer texto que encuentra la fila (sin importar la columna)
-    first_text = (
-        df.fillna("") 
-          .apply(lambda r: next((v for v in r if str(v).strip()), ""), axis=1)
-    )
-
-   
-    price_cols = [
-        "list_price", "full_pallet_price", "half_load_full_pallet_price",
-        "full_load_full_pallet_price", "full_load_best_price",
-    ]
-    is_title = (
-        first_text.str.fullmatch(TITLE_RE).fillna(False) &
-        (df[price_cols].fillna(0).sum(axis=1) == 0)
-    )
-
-    # 3) Creamos y propagamos la columna `species`
-    df["species"] = None
-    df.loc[is_title, "species"] = first_text[is_title].str.upper()
-    df["species"] = df["species"].ffill()
-
-    # 4) Quitamos las filas-título (ya se propagaron)
-    df = df[~is_title].reset_index(drop=True)
-    # ------------------------------------------------------------------ #
-
-    export_data
-    
+    # 1️⃣ Propaga species y remueve fila-título
     df = add_species_column(df)
-    
 
-    # 1) Descarta filas “título” que quedaron chuecas / sin precios
-    df = df[df.apply(_is_valid_product, axis=1)].reset_index(drop=True)
-    
-    
-    # Elimina cabeceras/fragmentos pero conserva la primera fila de datos real
+    # 2️⃣ Limpia cabeceras/fragmentos
     df = df[~df.apply(_is_header_row, axis=1)].reset_index(drop=True)
+    df = df[df.apply(_is_valid_product, axis=1)].reset_index(drop=True)
     df.dropna(how="all", inplace=True)
-    
-    #df = add_species_column(df)
 
-    # Metadatos
+    # 3️⃣ Metadatos
     df["plant_location"] = extract_plant_location(pdf)
     df["date_inserted"] = extract_effective_date(pdf)
     df["source"] = pathlib.Path(pdf).name
 
     df = _fix_numeric(df)
-    print("--------------------->>> species únicos antes de subir:", df["species"].dropna().unique()[:5])
-    print("--------------------->>> filas con species no nulo   :", df["species"].notna().sum())
+
+    # Debug rápido (puedes comentar)
+    print(">>> species muestras:", df["species"].dropna().unique()[:5])
+    print(">>> filas con species:", df["species"].notna().sum())
 
     return df[[*COLUMN_NAMES, "plant_location", "date_inserted", "source", "species"]]
 
---------------------------------------------------------------------------------------------------
-UPLOAD DATA:
-import pathlib
-import pyarrow.parquet as pq
-import pyarrow as pa
-import os
-
-class DataUpload:
-    PARQUET_FOLDER_PATH = "cdp_interface/exported_parquet_files"
-  
-    def __init__(self, file_system, database):
-        self.fs = file_system
-        self.db = database
-
-    def upload_data(self, data, table_name, file_name):
-        print(f"uploading data to {table_name}")
-        file_path = self.export_data_to_parquet_file(data, table_name, file_name)
-        if file_path is None:
-            return False
-
-        if not self.upload_parquet_file_to_hdfs(file_path, table_name, file_name):
-            return False
-        print("upload_parquet_file_to_hdfs done.")
-        
-        if not self.create_temp_table_from_parquet_file(table_name, file_name):
-            return False
-        print("temp table created from parquet file.")
-
-        if not self.main_table_data_upload(table_name, file_name):
-            return False
-        print("data uploaded to main table.")
-
-        if not self.main_table_refresh_metadata(table_name):
-            return False
-        print("main table refreshed.")
-
-        if not self.drop_temp_table(table_name, file_name):
-            return False
-        print("temp table dropped.")
-        
-        self.delete_temp_parquet_file(file_path)
-        return True
-
-    def export_data_to_parquet_file(self, data, table_name, file_name):
-        print("export_data_to_parquet_file")
-        try:
-            pathlib.Path(self.PARQUET_FOLDER_PATH).mkdir(exist_ok=True)
-            
-            new_file_path = pathlib.Path(self.PARQUET_FOLDER_PATH) / f"{table_name}_{file_name}.parquet"
-            parquet_table = pa.Table.from_pandas(data, preserve_index=False)
-            pq.write_table(parquet_table, where=new_file_path, version="1.0")
-            return new_file_path
-        except Exception as ex:
-            print(f"[ERROR] --- export_data_to_parquet_file: {ex}")
-            return None
-
-    def upload_parquet_file_to_hdfs(self, file_path, table_name, file_name):
-        print("upload_parquet_file_to_hdfs")
-        # Ruta en HDFS. 
-        # Ten en cuenta que se concatenará con self.environment["hdfs_root_folder"] internamente en FileSystemHDFS.
-        hdfs_path = f"{table_name}_{file_name}"
-        return self.fs.upload_file(file_path, hdfs_path)
-
-    def create_temp_table_from_parquet_file(self, table_name, file_name):
-        print("create_temp_table_from_parquet_file")
-        try:
-            temp_table = f"{table_name}_{file_name}"
-            query = pathlib.Path("cdp_interface/sql_queries/temp_table.sql").read_text()
-            query = query.replace("@temp_table", temp_table)
-
-            if not self.db.execute(query):
-                return False
-            if not self.db.refresh_table(temp_table):
-                return False
-
-            cols_temp = self.db.column_list(temp_table)
-            print(f"[DEBUG] Columns in temp table {temp_table} after creation:", cols_temp)
-            print("#########################################################################")
-            return True
-        except Exception as ex:
-            print(ex)
-            return False
-
-    def column_definition(self, table_name):
-        table_columns = self.db.column_list(table_name)
-        if not table_columns:
-            return False
-        # Construye un string con los nombres de columna separados por coma
-        # Ej: "product_number, formula_code, product_name, ..."
-        return ",".join(str(col[0]) for col in table_columns)
-
-    def main_table_data_upload(self, table_name, file_name):
-        try:
-            temp_table_name = f"{table_name}_{file_name}"
-            
-            column_def = self.column_definition(temp_table_name)
-            print(f"[DEBUG] column_def for temp table: {column_def}")
-            print("#########################################################################")
-            if not column_def:
-                return False
-
-            query = pathlib.Path("cdp_interface/sql_queries/data_upload.sql").read_text()
-            query = query.replace("@table_name", table_name)
-            query = query.replace("@temp_table_name", temp_table_name)
-            query = query.replace("@column_definition", column_def)
-            
-            if not self.db.execute(query):
-                return False
-
-            return True
-        except Exception as ex:
-            print(ex)
-            return False
-
-    def main_table_refresh_metadata(self, table_name):
-        print("main_table_refresh_metadata")
-        try:
-            if not self.db.refresh_table(table_name):
-                return False
-            # Si quieres compute stats
-            # if not self.db.compute_stats(table_name):
-            #     return False
-            return True
-        except Exception as ex:
-            print(ex)
-            return False
-
-    def drop_temp_table(self, table_name, file_name):
-        print("drop_temp_table")
-        try:
-            temp_table_name = f"{table_name}_{file_name}"
-            self.db.drop_table(temp_table_name)
-            return True
-        except Exception as ex:
-            print(ex)
-            return False
-        
-    def delete_temp_parquet_file(self, file_path):
-        print("deleting_temp_parquet_file")
-        try:
-            os.remove(file_path)
-            return True
-        except Exception as error:
-            print(error)
-            return False
--------------------------------------------------------------------------------------------------------------
-
-MAIN:import competitor_data.purina_file_horizontal as pfh
-import os
-import pathlib
-import re
-import tabula
-import pandas as pd
-
-# SharePoint
-from sharepoint_interface.sharepoint_interface import get_sharepoint_interface
-
-# CDP
-import credentials as crd
-import environments as env
-from cdp_interface import CDPInterface
-
-REPOSITORY  = "/sites/RetailPricing/Shared%20Documents/General/Competitive%20Intel/Competitor%20PDF%20new%20format%20(horizontal%20file)/"
-LOCAL_REPOSITORY = "sharepoint_interface/local_repository/"
-
-def correct_file_name(val: str) -> str:
-    """
-    Reemplaza espacios/puntos/caracteres raros y 
-    deja un string 'limpio' para la tabla temporal.
-    """
-    val = str(val).lower()
-    # elimina ceros adelante
-    val = re.sub(r'^(0){2,}', "", val)
-    # elimina espacios al inicio
-    val = re.sub(r'^[" "-]+', "", val)
-    # elimina caracteres \r \n \t \u00a0
-    val = re.sub(r'[\r\n\r\t\u00a0]+', ' ', val)
-    # colapsa espacios múltiples
-    val = re.sub(r'( ){2,}', ' ', val)
-    # quita espacios finales
-    val = val.strip()
-    # reemplaza espacios, puntos y guiones por underscore
-    val = val.replace(" ", "_")
-    val = val.replace(".", "_")
-    val = val.replace("-", "_")
-    return val
-
-def set_column_types(df: pd.DataFrame) -> pd.DataFrame:
-    # Funcion para asegurar que no hayan columnas fuera de las necesaria y convierte los tipos segun la tabla en CPD
-    # Columnas string
-    string_cols = [
-        "product_number",
-        "formula_code",
-        "product_name",
-        "product_form",
-        "unit_weight",
-        "stocking_status",
-        "fob_or_dlv",
-        "species",
-        "plant_location",
-        "date_inserted",
-        "source",
-        "species"
-    ]
-    for col in string_cols:
-        if col in df.columns:
-            df[col] = df[col].astype("string")
-
-    # Columnas float
-    float_cols = [
-        "pallet_quantity",
-        "min_order_quantity",
-        "days_lead_time",
-        "price_change",
-        "list_price",
-        "full_pallet_price",
-        "half_load_full_pallet_price",
-        "full_load_full_pallet_price",
-        "full_load_best_price"
-    ]
-    for col in float_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    return df
-
-def excecute_process():
-    sp = get_sharepoint_interface("retailpricing")
-    if not sp:
-        print("[ERROR] No se pudo obtener la interfaz de SharePoint.")
-        return
-
-    files = sp.files_in_folder(REPOSITORY)
-    if not files:
-        print(f"[INFO] No hay archivos en {REPOSITORY}")
-        return
-
-    # Filtrar PDFs
-    pdf_files = [f for f in files if f["file_name"].lower().endswith(".pdf")]
-    if not pdf_files:
-        print(f"[INFO] No se encontraron PDFs en {REPOSITORY}")
-        return
-
-    # Conexión a CDP (ambiente de producción en este ejemplo)
-    cdp = CDPInterface(env.production, crd.process_account)
-
-    total = len(pdf_files)
-    for idx, pdf_info in enumerate(pdf_files, start=1):
-        pdf_filename = pdf_info["file_name"]
-        pdf_sharepoint_path = pdf_info["file_path"]
-        print(f"\n[{idx}/{total}] Procesando: {pdf_filename}")
-
-        if not os.path.exists(LOCAL_REPOSITORY):
-            os.makedirs(LOCAL_REPOSITORY, exist_ok=True)
-
-        # Descargar PDF
-        local_pdf_path = sp.download_file(pdf_sharepoint_path, LOCAL_REPOSITORY)
-        if not local_pdf_path:
-            print("[ERROR] No se pudo descargar el PDF.")
-            continue
-
-        # Parsear (horizontal)
-        df = pfh.read_file(str(local_pdf_path))
-
-        # Observa columnas
-        print("[DEBUG] Columnas del DF tras parsear:\n", df.columns.tolist())
-        if "ref_col" in df.columns:
-            print("[WARN] Se detectó ref_col en el DF... se eliminará.")
-            df = df.drop(columns=["ref_col"], errors="ignore")
-
-        print(df.head(5))
-
-        # Forzar tipos
-        df = set_column_types(df)
-        print("[DEBUG] Columnas tras set_column_types:\n", df.columns.tolist())
-
-        # Revisar shape
-        print("[INFO] DataFrame shape:", df.shape)
-        print(df.head(10))
-
-        if df.shape[0] > 0:
-            # Nombre base sin extensión
-            raw_name = pathlib.Path(pdf_filename).stem
-            # Aplica la lógica de limpieza
-            base_name = correct_file_name(raw_name)
-            print("[DEBUG] Nombre base para la tabla temporal:", base_name)
-
-            # Subir a la tabla final
-            if cdp.upload_data(df, "comp_price_horizontal_files", base_name):
-                print(f"[INFO] '{pdf_filename}' subido correctamente a 'comp_price_horizontal_files'.")
-            else:
-                print("[ERROR] Falló la subida a CDP.")
-        else:
-            print("[INFO] DF vacío, no se suben datos.")
-
-        # Eliminar de SharePoint (descomentar si ya confirmaste la subida):
-        
-        try:
-            if sp.delete_file(pdf_sharepoint_path):
-                print(f"[INFO] Archivo '{pdf_filename}' eliminado de SharePoint.")
-            else:
-                print(f"[WARN] No se pudo eliminar '{pdf_filename}' de SharePoint.")
-        except Exception as e:
-            print(f"[ERROR] Al intentar eliminar en SharePoint: {e}")
-        
-
-    print("\n[INFO] Proceso completado para todos los PDFs.")
-
+# --------------------------------------------------------------------------- #
+# 10. Test rápido
+# --------------------------------------------------------------------------- #
 if __name__ == "__main__":
-    excecute_process()
+    import sys
+    pdf_file = sys.argv[1]
+    df_test = read_file(pdf_file)
+    print(df_test.head())
