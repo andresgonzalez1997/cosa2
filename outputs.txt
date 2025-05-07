@@ -1,261 +1,212 @@
-# purina_file_horizontal.py  – rev. 2025-05-08  (Python 3.7 / CDSW)
-"""
-Extrae listas de precio *horizontales* de Purina y las deja en un DataFrame con:
-
-    • 16 columnas estándar                      (ver COLUMN_NAMES)
-    • plant_location   → «STATESVILLE NC», «KANSAS CITY MO», …
-    • date_inserted    → fecha efectiva (YYYY-MM-DD)
-    • source           → nombre del PDF
-    • species          → título de la sección (AQUACULTURE, CATTLE …)
-"""
-
-from __future__ import annotations        # string-annotations (PEP-563) p/ 3.7
-import datetime as _dt
-import pathlib
-import re
-from typing import List, Optional, Union
-
-import pandas as pd
-import tabula
-from PyPDF2 import PdfReader
-
-
-# ───────────────────────────────────── 1. Nombres de columnas ────────────────
-COLUMN_NAMES: List[str] = [
-    "product_number",
-    "formula_code",
-    "product_name",
-    "product_form",
-    "unit_weight",
-    "pallet_quantity",
-    "stocking_status",
-    "min_order_quantity",
-    "days_lead_time",
-    "fob_or_dlv",
-    "price_change",
-    "list_price",
-    "full_pallet_price",
-    "half_load_full_pallet_price",
-    "full_load_full_pallet_price",
-    "full_load_best_price",
-]
-
-NUMERIC_COLS: List[str] = (
-    ["pallet_quantity", "min_order_quantity", "days_lead_time"]
-    + COLUMN_NAMES[10:]
-)
-
-# ───────────────────────────────────── 2.  Fecha y planta ────────────────────
-_DATE_PATTERNS = [
-    re.compile(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*Effective\s+Date', re.I),
-    re.compile(r'Effective\s+Date\s*[-–—]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', re.I),
-]
-
-
-def extract_effective_date(pdf_path: Union[str, pathlib.Path]) -> _dt.date:
-    txt = PdfReader(str(pdf_path)).pages[0].extract_text()
-    for rx in _DATE_PATTERNS:
-        m = rx.search(txt)
-        if m:
-            date_str = m.group(1)
-            sep = "/" if "/" in date_str else "-"
-            mm, dd, yy = date_str.split(sep)
-            if len(yy) == 2:
-                yy = "20" + yy
-            return _dt.datetime.strptime(
-                f"{mm}{sep}{dd}{sep}{yy}", f"%m{sep}%d{sep}%Y"
-            ).date()
-    raise ValueError("Fecha efectiva no encontrada.")
-
-
-def extract_plant_location(pdf_path: Union[str, pathlib.Path]) -> str:
-    try:
-        tbls = tabula.read_pdf(
-            pdf_path,
-            pages=1,
-            area=[0, 650, 60, 1000],
-            lattice=False,
-            guess=False,
-            pandas_options={"header": None, "dtype": str},
-        )
-        if not tbls:
-            return "PLANTA DESCONOCIDA"
-
-        text = " ".join(tbls[0].fillna("").values.flatten())
-        m = re.search(r"-\s*([\w &.\-]+?)\s+([A-Za-z]{2})\b", text)
-        if m:
-            city, state = m.groups()
-            return f"{city.strip().upper()} {state.upper()}"
-        return "PLANTA DESCONOCIDA"
-    except Exception:
-        return "PLANTA DESCONOCIDA"
-
-
-# ─────────────────────────────── 3.  Lectura PDF con Tabula ──────────────────
-def _read_tables(pdf_path: Union[str, pathlib.Path]):
-    try:
-        return tabula.read_pdf(
-            pdf_path,
-            pages="all",
-            lattice=True,
-            guess=False,
-            pandas_options={"dtype": str, "header": None},
-        )
-    except Exception as exc:
-        print("[tabula]", exc)
-        return []
-
-
-# ─────────────────────────────── 4.  Normalizar a 16 columnas ────────────────
-def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
-    # Recorta columnas vacías al final
-    while tbl.shape[1] > 0 and tbl.iloc[:, -1].isna().all():
-        tbl = tbl.iloc[:, :-1]
-
-    if tbl.shape[1] < 16:
-        return None
-
-    # Si hay más de 16 → busca la “ventana” de 16 con más números
-    if tbl.shape[1] > 16:
-        best_start, best_score = 0, -1
-        row0 = tbl.iloc[0].astype(str)
-        for start in range(tbl.shape[1] - 15):
-            slice_ = row0.iloc[start:start + 16]
-            score = slice_.str.replace(",", "").str.strip() \
-                           .str.match(r"^-?[\d.]+$").sum()
-            if score > best_score:
-                best_start, best_score = start, score
-        tbl = tbl.iloc[:, best_start:best_start + 16]
-
-    tbl.columns = COLUMN_NAMES
-    return tbl
-
-
-# ─────────────────────────────── 5.  Sanitizador numérico ────────────────────
-def _to_float(val):
-    if pd.isna(val):
-        return None
-    s = str(val).replace(",", "").strip()
-    sign = -1 if s.endswith("-") or (s.startswith("(") and s.endswith(")")) else 1
-    s = s.strip("()- ")
-    try:
-        return float(s) * sign
-    except ValueError:
-        return None
-
-
-def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
-    for col in NUMERIC_COLS:
-        if col in df.columns:
-            df[col] = df[col].apply(_to_float)
-    return df
-
-
-# ─────────────────────────────── 6.  Filas-cabecera / fragmentos ─────────────
-HEADER_TOKENS = {
-    "PRODUCT", "FORM", "UNIT", "WEIGHT", "PALLET", "MIN", "ORDER", "QUANTITY",
-    "DAYS", "LEAD", "TIME", "STOCKING", "STATUS", "FOB", "DLV",
-}
-_PRICE_RE = re.compile(
-    "|".join(
-        re.escape(p) for p in (
-            "PRICE / UNIT", "PRICE IN US DOLLAR", "PRICE IN US DOLLARS",
-            "MIN / DAYS", "FORMULA CODE", "MONTHLY", "PAGE",
-        )
-    ),
-    re.I,
-)
-
-
-def _is_header_row(row: pd.Series) -> bool:
-    txt = " ".join(row.astype(str)).upper()
-
-    if _PRICE_RE.search(txt):
-        return True
-
-    first = str(row.iloc[0]).strip().upper()
-    if "FORMULA" in txt and "PRODUCT" in txt:
-        return True
-    if first.startswith("PRODUCT") and str(row.iloc[1]).upper().startswith("FORMULA"):
-        return True
-    if pd.isna(row["list_price"]) and any(tok in txt for tok in HEADER_TOKENS):
-        return True
-
-    return False
-
-
-# ─────────────────────────────── 7.  Species por tabla ───────────────────────
-_UNWANTED_SPECIES = re.compile(
-    r"EFFECTIVE\s+DATE|PRICE\s|^\s*$", re.I
-)
-
-
-def _extract_species_and_clean(tbl: pd.DataFrame, fallback: str) -> (str, pd.DataFrame):
-    """
-    Busca filas cuyo product_number no inicia con dígito.
-    Si encuentra una válida ⇒ nueva *species* (se descarta esa fila).
-    Si no ⇒ usa el `fallback` recibido.
-    Devuelve (species, df_sin_filas_título)
-    """
-    drop_idx = []
-    species = fallback
-
-    for idx, pn in tbl["product_number"].fillna("").astype(str).iteritems():
-        pn = pn.strip()
-        if pn == "" or not pn[0].isdigit():
-            candidate = " ".join(tbl.loc[idx].fillna("").astype(str)).strip().upper()
-            # descarta candidatos irrelevantes (Effective Date, Price header, …)
-            if not _UNWANTED_SPECIES.search(candidate):
-                species = candidate
-            drop_idx.append(idx)
-
-    tbl = tbl.drop(drop_idx).reset_index(drop=True)
-    return species, tbl
-
-
-# ─────────────────────────────── 8.  FUNCIÓN PRINCIPAL ───────────────────────
-def read_file(pdf_path: Union[str, pathlib.Path]) -> pd.DataFrame:
-    """
-    Devuelve DataFrame limpio con:
-        16 columnas estándar + plant_location + date_inserted + source + species
-    (20 columnas totales, siempre en ese orden)
-    """
-    raw_tables = _read_tables(pdf_path)
-    if not raw_tables:
-        return pd.DataFrame()
-
-    dfs = []
-    current_species = None  # se propaga entre tablas / páginas
-
-    for raw in raw_tables:
-        std = _standardize(raw)
-        if std is None:
-            continue
-
-        std = std[~std.apply(_is_header_row, axis=1)].reset_index(drop=True)
-        std.dropna(how="all", inplace=True)
-        if std.empty:
-            continue
-
-        current_species, std = _extract_species_and_clean(std, current_species)
-
-        if std.empty:
-            continue
-
-        std["species"] = current_species
-        dfs.append(std)
-
-    if not dfs:
-        return pd.DataFrame()
-
-    df = pd.concat(dfs, ignore_index=True)
-    df = _fix_numeric(df)
-
-    # Metadatos
-    df["plant_location"] = extract_plant_location(pdf_path)
-    df["date_inserted"] = extract_effective_date(pdf_path)
-    df["source"] = pathlib.Path(pdf_path).name
-
-    final_cols = COLUMN_NAMES + ["plant_location", "date_inserted",
-                                 "source", "species"]
-    return df.loc[:, final_cols]
+species
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+3004467 5250 TC WHOLE OATS NAT 500617 MEAL 50.00 LB 40 SO 0 5 DLV 0.00 24.40 24.40 24.40 24.40
+3004467 5250 TC WHOLE OATS NAT 500617 MEAL 50.00 LB 40 SO 0 5 DLV 0.00 24.40 24.40 24.40 24.40
+3004467 5250 TC WHOLE OATS NAT 500617 MEAL 50.00 LB 40 SO 0 5 DLV 0.00 24.40 24.40 24.40 24.40
+3004467 5250 TC WHOLE OATS NAT 500617 MEAL 50.00 LB 40 SO 0 5 DLV 0.00 24.40 24.40 24.40 24.40
+3004467 5250 TC WHOLE OATS NAT 500617 MEAL 50.00 LB 40 SO 0 5 DLV 0.00 24.40 24.40 24.40 24.40
+3004467 5250 TC WHOLE OATS NAT 500617 MEAL 50.00 LB 40 SO 0 5 DLV 0.00 24.40 24.40 24.40 24.40
+3004467 5250 TC WHOLE OATS NAT 500617 MEAL 50.00 LB 40 SO 0 5 DLV 0.00 24.40 24.40 24.40 24.40
+3004467 5250 TC WHOLE OATS NAT 500617 MEAL 50.00 LB 40 SO 0 5 DLV 0.00 24.40 24.40 24.40 24.40
+3004467 5250 TC WHOLE OATS NAT 500617 MEAL 50.00 LB 40 SO 0 5 DLV 0.00 24.40 24.40 24.40 24.40
+3004467 5250 TC WHOLE OATS NAT 500617 MEAL 50.00 LB 40 SO 0 5 DLV 0.00 24.40 24.40 24.40 24.40
+3004467 5250 TC WHOLE OATS NAT 500617 MEAL 50.00 LB 40 SO 0 5 DLV 0.00 24.40 24.40 24.40 24.40
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+CUST # 10006911
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+L L GOODNIGHT AND SONS INC
+3011987-506 55ST HS SHOWLAMB STRETCH 17 TXT DX TEXTURED 50.00 LB 40 SO 0 5 DLV 0.25 23.54 23.54 23.29 23.04
+3011987-506 55ST HS SHOWLAMB STRETCH 17 TXT DX TEXTURED 50.00 LB 40 SO 0 5 DLV 0.25 23.54 23.54 23.29 23.04
+3011987-506 55ST HS SHOWLAMB STRETCH 17 TXT DX TEXTURED 50.00 LB 40 SO 0 5 DLV 0.25 23.54 23.54 23.29 23.04
+3011987-506 55ST HS SHOWLAMB STRETCH 17 TXT DX TEXTURED 50.00 LB 40 SO 0 5 DLV 0.25 23.54 23.54 23.29 23.04
+3011987-506 55ST HS SHOWLAMB STRETCH 17 TXT DX TEXTURED 50.00 LB 40 SO 0 5 DLV 0.25 23.54 23.54 23.29 23.04
