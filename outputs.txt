@@ -1,7 +1,164 @@
-Got stderr: May 07, 2025 9:19:46 PM org.apache.pdfbox.pdmodel.font.PDTrueTypeFont <init>
-WARNING: Using fallback font 'LiberationSans' for 'ArialMT'
+"""
+Purina horizontal price-list reader (Python 3.7).
 
-Empty DataFrame
-Columns: [product_number, species]
-Index: []
-Rows: 0
+Adds & propagates a new “species” column while leaving the original
+lattice/≥10-column extraction flow intact.
+"""
+
+from __future__ import annotations
+import pathlib, re
+from datetime import datetime
+from typing import List, Optional
+
+import numpy as np
+import pandas as pd
+import tabula
+
+
+# ── 1  Static config ────────────────────────────────────────────────────────
+COLUMN_NAMES = [
+    "product_number", "formula_code", "product_name", "product_form",
+    "unit_weight", "pallet_quantity", "stocking_status", "min_order_quantity",
+    "days_lead_time", "fob_or_dlv", "price_change", "list_price",
+    "full_pallet_price", "full_load_best_price",
+]
+TABULA_OPTIONS = dict(pages="all", lattice=True, guess=False, area=None, columns=None)
+
+_SPECIES_RX = re.compile(
+    r"^\s*(AQUACULTURE|CATTLE|GOAT|SHEEP|SWINE|POULTRY)", re.IGNORECASE
+)
+
+_DATE_RXS = [
+    r"(\d{2}/\d{2}/\d{4})", r"(\d{4}\.\d{2}\.\d{2})", r"(\d{2}-\d{2}-\d{4})"
+]
+
+
+# ── 2  Row helpers ──────────────────────────────────────────────────────────
+def _row_text(row: pd.Series) -> str:
+    """Return first non-empty cell in the row, stripped."""
+    for v in row.values.tolist():
+        s = str(v).strip()
+        if s and s.lower() != "nan":
+            return s
+    return ""
+
+
+def _row_has_species(row: pd.Series) -> Optional[str]:
+    """Return the species keyword if present anywhere in the row."""
+    m = _SPECIES_RX.match(_row_text(row))
+    return m.group(1).upper() if m else None
+
+
+# ── 3  Tabula-table standardiser ───────────────────────────────────────────
+def _standardize(df: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """
+    • Keep data tables with ≥10 columns (original rule).
+    • ALSO keep 1-col or few-col tables *if* they contain a species keyword;
+      convert them to a header-placeholder row matching COLUMN_NAMES.
+    """
+    if df.empty:
+        return None
+
+    # header row comes in as 1-col table
+    if df.shape[1] < 10:
+        first = _row_has_species(df.iloc[0])
+        if first:                       # species header → keep (placeholder)
+            hdr = pd.DataFrame({"product_name": [first]})
+            for col in COLUMN_NAMES:
+                if col not in hdr.columns:
+                    hdr[col] = np.nan
+            return hdr[COLUMN_NAMES]
+        return None                     # tiny junk table → drop
+
+    # normal data table
+    df.columns = [f"col_{i}" for i in range(df.shape[1])]
+    while df.shape[1] < len(COLUMN_NAMES):
+        df[f"col_{df.shape[1]}"] = np.nan
+    df = df.iloc[:, : len(COLUMN_NAMES)]
+    df.columns = COLUMN_NAMES
+    return df
+
+
+# ── 4  Numeric cleaner ─────────────────────────────────────────────────────
+def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    numeric = [
+        "unit_weight", "pallet_quantity", "min_order_quantity",
+        "days_lead_time", "price_change", "list_price",
+        "full_pallet_price", "full_load_best_price",
+    ]
+    for col in numeric:
+        df[col] = pd.to_numeric(
+            df[col]
+              .astype(str)
+              .str.replace(",", "", regex=False)
+              .replace({"": np.nan, "nan": np.nan}),
+            errors="coerce"
+        )
+    return df
+
+
+# ── 5  Metadata helpers ────────────────────────────────────────────────────
+def _extract_first_match(rxs: List[str], txt: str) -> Optional[str]:
+    for p in rxs:
+        m = re.search(p, txt)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _extract_effective_date(pdf: str | pathlib.Path) -> Optional[datetime]:
+    token = _extract_first_match(_DATE_RXS, pathlib.Path(pdf).stem)
+    if token:
+        for fmt in ("%m/%d/%Y", "%Y.%m.%d", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(token, fmt)
+            except ValueError:
+                continue
+    return None
+
+
+def _extract_plant_location(pdf: str | pathlib.Path) -> str:
+    return pathlib.Path(pdf).stem.split()[-1].upper()
+
+
+# ── 6  Species propagation ────────────────────────────────────────────────
+def _add_species_column(df: pd.DataFrame) -> pd.DataFrame:
+    species, current = [], None
+    for _, row in df.iterrows():
+        maybe = _row_has_species(row)
+        if maybe:           # header row
+            current = maybe
+            species.append(None)   # will be dropped later
+        else:
+            species.append(current)
+    df["species"] = species
+    return df
+
+
+# ── 7  Main entrypoint ─────────────────────────────────────────────────────
+def read_file(pdf: str | pathlib.Path) -> pd.DataFrame:
+    tables = tabula.read_pdf(str(pdf), **TABULA_OPTIONS)
+    std = [t for t in (_standardize(x) for x in tables) if t is not None]
+    if not std:
+        return pd.DataFrame()
+
+    df = pd.concat(std, ignore_index=True)
+    df = _add_species_column(df)
+    df = df[df["species"].notna()].reset_index(drop=True)  # drop header rows
+    df = _fix_numeric(df)
+
+    # file-level metadata
+    df["plant_location"] = _extract_plant_location(pdf)
+    df["date_inserted"]   = _extract_effective_date(pdf)
+    df["source"]          = pathlib.Path(pdf).name
+
+    return df[
+        [*COLUMN_NAMES, "plant_location", "date_inserted", "source", "species"]
+    ]
+
+
+# ── 8  Quick test ──────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    demo = read_file("2024.10.07 Statesville.pdf")   # adjust path if needed
+    print(demo[["product_number", "species"]].head(25))
+    print("Rows:", len(demo))
