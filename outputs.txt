@@ -1,15 +1,12 @@
 """
-Lectura y limpieza de PDFs horizontal Purina.
-
-• Conservar la primera línea real de datos de cada página.
-• Eliminar cabeceras repetidas ("PRODUCT NUMBER …"), fragmentos ("MIN / DAYS")
-  y textos sueltos como "Price / Unit" o "Price in US Dollars".
-• Corrige números negativos (100-  →  -100) y añade metadatos (fecha, planta, source)
-• NUEVO: agrega la columna «species» ⇒ el encabezado que aparece sobre cada tabla
-  (AQUACULTURE, CATTLE - ACCURATION/SPR BLOCKS, …) propagado a todas las filas.
-• Uso público:  
-      >>> import purina_file_horizontal as pfh  
-      >>> df = pfh.read_file("2024.10.07 Statesville.pdf")
+purina_file_horizontal.py  – versión 2025-05-07
+------------------------------------------------
+• Limpia tablas horizontales de listas de precio Purina.
+• Concatena todas las páginas y añade metadatos (planta, fecha, fuente).
+• NUEVO (fix): 
+    1. «species» se toma del verdadero rótulo de sección (filas SIN dígitos).
+    2. Se corrige el traslape de columnas → siempre 16 cols estándar.
+Copiar / pegar y reemplazar el módulo anterior.
 """
 
 from __future__ import annotations
@@ -22,9 +19,8 @@ import pandas as pd
 import tabula
 from PyPDF2 import PdfReader
 
-
 # --------------------------------------------------------------------------- #
-# 1. Nombres estándar (16 columnas del PDF original)                          #
+# 1. Nombres estándar (16 columnas reales)                                    #
 # --------------------------------------------------------------------------- #
 COLUMN_NAMES: List[str] = [
     "product_number",
@@ -46,17 +42,15 @@ COLUMN_NAMES: List[str] = [
 ]
 
 # --------------------------------------------------------------------------- #
-# 2. Columnas numéricas que se convertirán a float                            #
+# 2. Columnas numéricas (para evitar errores tipo Parquet/Impala)             #
 # --------------------------------------------------------------------------- #
-NUMERIC_COLS: List[str] = [
-    "pallet_quantity",
-    "min_order_quantity",
-    "days_lead_time",
-] + COLUMN_NAMES[10:]     # todas las columnas de precios numéricos
-
+NUMERIC_COLS: List[str] = (
+    ["pallet_quantity", "min_order_quantity", "days_lead_time"]
+    + COLUMN_NAMES[10:]
+)
 
 # --------------------------------------------------------------------------- #
-# 3. Regex de fecha y planta (metadatos)                                      #
+# 3. Regex fecha y planta                                                     #
 # --------------------------------------------------------------------------- #
 _DATE_PATTERNS = [
     re.compile(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*Effective\s+Date', re.I),
@@ -65,18 +59,16 @@ _DATE_PATTERNS = [
 
 
 def extract_effective_date(pdf_path: str | pathlib.Path) -> _dt.date:
-    """Devuelve la fecha efectiva (datetime.date)."""
     reader = PdfReader(str(pdf_path))
     first_page_text = reader.pages[0].extract_text()
 
     for rx in _DATE_PATTERNS:
-        m = rx.search(first_page_text)
-        if m:
-            date_str = m.group(1)              # ej.: 10-07-2024
+        if (m := rx.search(first_page_text)):
+            date_str = m.group(1)
             sep = "/" if "/" in date_str else "-"
             mm, dd, yy = date_str.split(sep)
             if len(yy) == 2:
-                yy = "20" + yy                 # normaliza año 2 → 4 dígitos
+                yy = "20" + yy
             return _dt.datetime.strptime(
                 f"{mm}{sep}{dd}{sep}{yy}", f"%m{sep}%d{sep}%Y"
             ).date()
@@ -85,12 +77,11 @@ def extract_effective_date(pdf_path: str | pathlib.Path) -> _dt.date:
 
 
 def extract_plant_location(pdf_path: str | pathlib.Path) -> str:
-    """Extrae la planta (STATESVILLE NC, etc.) de la franja superior."""
     try:
         tables = tabula.read_pdf(
             pdf_path,
             pages=1,
-            area=[0, 650, 60, 1000],       # coordenadas fijas
+            area=[0, 650, 60, 1000],
             lattice=False,
             guess=False,
             pandas_options={"header": None, "dtype": str},
@@ -98,24 +89,22 @@ def extract_plant_location(pdf_path: str | pathlib.Path) -> str:
         if not tables:
             return "PLANTA DESCONOCIDA"
 
-        line = " ".join(tables[0].fillna("").values.flatten())
-        m = re.search(r"-\s*([A-Za-z &.\-]+?)\s+([A-Za-z]{2})\b", line)
-        if m:
+        text = " ".join(tables[0].fillna("").values.flatten())
+        if (m := re.search(r"-\s*([A-Za-z &.\-]+?)\s+([A-Za-z]{2})\b", text)):
             city, state = m.groups()
             return f"{city.strip().upper()} {state.upper()}"
-
         return "PLANTA DESCONOCIDA"
     except Exception:
         return "PLANTA DESCONOCIDA"
 
 
 # --------------------------------------------------------------------------- #
-# 4. Lectura de tablas con Tabula                                             #
+# 4. Utilidad: leer TODAS las tablas                                          #
 # --------------------------------------------------------------------------- #
-def _read_tables(pdf: str | pathlib.Path):
+def _read_tables(pdf_path: str | pathlib.Path):
     try:
         return tabula.read_pdf(
-            pdf,
+            pdf_path,
             pages="all",
             lattice=True,
             guess=False,
@@ -127,26 +116,37 @@ def _read_tables(pdf: str | pathlib.Path):
 
 
 # --------------------------------------------------------------------------- #
-# 5. Normalización a 16 columnas estándar                                     #
+# 5. Normalización a 16 columnas (corrige traslape hasta 20-ish col.)         #
 # --------------------------------------------------------------------------- #
 def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """Recorta a 16 columnas y corrige posibles desplazamientos (17 columnas)."""
+    # Elimina columnas al final que estén completamente vacías
+    while tbl.shape[1] > 0 and tbl.iloc[:, -1].isna().all():
+        tbl = tbl.iloc[:, :-1]
+
+    # Si sigue siendo menor a 16 → irreparable
     if tbl.shape[1] < 16:
         return None
 
-    if tbl.shape[1] >= 17:                     # desplazamiento habitual
-        first, second = tbl.iloc[:, 0], tbl.iloc[:, 1]
-        numeric_like = second.astype(str).str[0].str.isdigit().mean() > 0.5
-        tbl = tbl.iloc[:, 1:17] if numeric_like else tbl.iloc[:, :16]
-    else:
-        tbl = tbl.iloc[:, :16]
+    # Si es mayor, buscar ventana de 16 que contenga la mayoría de precios numéricos
+    if tbl.shape[1] > 16:
+        best_start, best_score = 0, -1
+        row0 = tbl.iloc[0].astype(str)
+
+        for start in range(tbl.shape[1] - 15):           # inclusive
+            slice_ = row0.iloc[start : start + 16]
+            # Heurística: cuántas columnas donde valor parece numérico
+            score = slice_.str.replace(",", "").str.strip().str.match(r"^-?[\d.]+$").sum()
+            if score > best_score:
+                best_start, best_score = start, score
+
+        tbl = tbl.iloc[:, best_start : best_start + 16]
 
     tbl.columns = COLUMN_NAMES
     return tbl
 
 
 # --------------------------------------------------------------------------- #
-# 6. Conversión segura a float                                                #
+# 6. Numeric sanitizer                                                        #
 # --------------------------------------------------------------------------- #
 def _to_float(val):
     if pd.isna(val):
@@ -168,23 +168,18 @@ def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------- #
-# 7. Filtrado de filas-cabecera / fragmentos                                  #
+# 7. Detección de filas cabecera / fragmentos                                 #
 # --------------------------------------------------------------------------- #
 HEADER_TOKENS = {
-    "PRODUCT", "FORM", "UNIT", "WEIGHT", "PALLET", "MIN", "ORDER",
-    "QUANTITY", "DAYS", "LEAD", "TIME", "STOCKING", "STATUS", "FOB", "DLV",
+    "PRODUCT", "FORM", "UNIT", "WEIGHT", "PALLET", "MIN", "ORDER", "QUANTITY",
+    "DAYS", "LEAD", "TIME", "STOCKING", "STATUS", "FOB", "DLV",
 }
 _PRICE_RE = re.compile(
     "|".join(
         re.escape(p)
         for p in (
-            "PRICE / UNIT",
-            "PRICE IN US DOLLAR",
-            "PRICE IN US DOLLARS",
-            "MIN / DAYS",
-            "FORMULA CODE",
-            "MONTHLY",
-            "PAGE",
+            "PRICE / UNIT", "PRICE IN US DOLLAR", "PRICE IN US DOLLARS",
+            "MIN / DAYS", "FORMULA CODE", "MONTHLY", "PAGE",
         )
     ),
     re.I,
@@ -192,77 +187,74 @@ _PRICE_RE = re.compile(
 
 
 def _is_header_row(row: pd.Series) -> bool:
-    combined = " ".join(row.astype(str)).upper()
+    txt = " ".join(row.astype(str)).upper()
 
-    if _PRICE_RE.search(combined):
+    if _PRICE_RE.search(txt):
         return True
-
     first = str(row.iloc[0]).strip().upper()
-    if "FORMULA" in combined and "PRODUCT" in combined:
+
+    if "FORMULA" in txt and "PRODUCT" in txt:
         return True
-    if first and first[0].isdigit():
-        return False
     if first.startswith("PRODUCT") and str(row.iloc[1]).upper().startswith("FORMULA"):
         return True
-    if pd.isna(row["list_price"]) and any(tok in combined for tok in HEADER_TOKENS):
+    if pd.isna(row["list_price"]) and any(tok in txt for tok in HEADER_TOKENS):
         return True
 
     return False
 
 
 # --------------------------------------------------------------------------- #
-# 8. Helper para extraer el encabezado (species) de cada tabla                #
+# 8. Species extractor (filas sin dígitos)                                    #
 # --------------------------------------------------------------------------- #
-def _extract_species_and_clean(tbl: pd.DataFrame):
+def _grab_species(tbl: pd.DataFrame):
     """
-    Si la primera celda no comienza con un dígito, se trata del título
-    de la sección (species).  Devuelve (species, tbl_sin_fila_encabezado).
+    Localiza la primera fila donde *ninguna* celda contiene dígitos.
+    Retorna (species, tbl_sin_fila_species). Si no encuentra, species=None.
     """
-    if tbl.empty:
-        return None, tbl
-
-    first_cell = str(tbl.iloc[0, 0]).strip()
-    if first_cell and not first_cell[0].isdigit():
-        species = first_cell.upper()
-        tbl = tbl.iloc[1:, :].reset_index(drop=True)
-        return species, tbl
-
+    for idx, row in tbl.iterrows():
+        joined = " ".join(row.fillna("").astype(str)).strip()
+        if joined and not any(ch.isdigit() for ch in joined):
+            species = joined.upper()
+            tbl = tbl.drop(idx).reset_index(drop=True)
+            return species, tbl
     return None, tbl
 
 
 # --------------------------------------------------------------------------- #
-# 9. Función principal                                                        #
+# 9. MAIN                                                                     #
 # --------------------------------------------------------------------------- #
-def read_file(pdf: str | pathlib.Path) -> pd.DataFrame:
+def read_file(pdf_path: str | pathlib.Path) -> pd.DataFrame:
     """
-    Procesa un PDF horizontal y devuelve un DataFrame limpio con 19 columnas
-    estándar + metadatos + species.
+    Procesa el PDF y devuelve un DataFrame con:
+        16 columnas estándar + plant_location + date_inserted + source + species
     """
-    tables = _read_tables(str(pdf))
-    if not tables:
+    raw_tables = _read_tables(pdf_path)
+    if not raw_tables:
         return pd.DataFrame()
 
     clean_tables = []
     current_species = None
 
-    for raw_tbl in tables:
-        # 1) Detecta species y elimina la fila-título
-        species, raw_tbl = _extract_species_and_clean(raw_tbl)
-        if species:
-            current_species = species      # actualiza species actual
+    for raw_tbl in raw_tables:
+        # 1) Species
+        current_species, raw_tbl = _grab_species(raw_tbl)
+        # Si no detectó en esta tabla, mantiene la anterior (propagación)
+        if current_species is None and clean_tables:
+            current_species = clean_tables[-1]["species"].iloc[0]
 
-        # 2) Normaliza a 16 columnas estándar
+        # 2) Normaliza ancho
         std_tbl = _standardize(raw_tbl)
         if std_tbl is None:
             continue
 
-        # 3) Filtra cabeceras/fragmentos (mantiene primeras líneas de datos)
+        # 3) Filtra cabeceras & fragmentos
         std_tbl = std_tbl[~std_tbl.apply(_is_header_row, axis=1)].reset_index(drop=True)
         std_tbl.dropna(how="all", inplace=True)
 
-        # 4) Propaga species a todas las filas de la tabla
-        std_tbl["species"] = current_species
+        if std_tbl.empty:
+            continue
 
+        std_tbl["species"] = current_species
         clean_tables.append(std_tbl)
 
     if not clean_tables:
@@ -271,9 +263,11 @@ def read_file(pdf: str | pathlib.Path) -> pd.DataFrame:
     df = pd.concat(clean_tables, ignore_index=True)
     df = _fix_numeric(df)
 
-    # 5) Metadatos finales
-    df["plant_location"] = extract_plant_location(pdf)
-    df["date_inserted"] = extract_effective_date(pdf)
-    df["source"] = pathlib.Path(pdf).name
+    # 4) Metadatos
+    df["plant_location"] = extract_plant_location(pdf_path)
+    df["date_inserted"] = extract_effective_date(pdf_path)
+    df["source"] = pathlib.Path(pdf_path).name
 
-    return df[[*COLUMN_NAMES, "plant_location", "date_inserted", "source", "species"]]
+    # 5) Orden final
+    return df[[*COLUMN_NAMES, "plant_location", "date_inserted",
+               "source", "species"]]
