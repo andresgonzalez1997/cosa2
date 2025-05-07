@@ -1,5 +1,5 @@
 """
-Lectura y limpieza de listas de precio Purina (archivos PDF horizontales).
+Lectura y limpieza de listas de precio Purina (PDF horizontales).
 
 Flujo:
 1. Lee todas las tablas con tabula-py.
@@ -23,7 +23,7 @@ import pandas as pd
 import tabula
 
 # --------------------------------------------------------------------------- #
-# 1. Parámetros configurables
+# 1 · Configuración
 # --------------------------------------------------------------------------- #
 
 COLUMN_NAMES = [
@@ -47,40 +47,64 @@ TABULA_OPTIONS = {
     "pages": "all",
     "guess": False,
     "lattice": True,
-    "area": None,     # área dinámica (sin coordenadas fijas)
+    "area": None,   # área dinámica
     "columns": None,
 }
 
+# Categorías válidas (título de sección)
 SPECIES_PATTERN = re.compile(
-    r"^(AQUACULTURE|CATTLE.*?|GOAT|SHEEP|SWINE|POULTRY).*",
-    re.IGNORECASE,
+    r"^\s*(AQUACULTURE|CATTLE|GOAT|SHEEP|SWINE|POULTRY)\b", re.IGNORECASE
 )
 
 DATE_PATTERNS = [
-    r"(\d{2}/\d{2}/\d{4})",   # 10/07/2024
-    r"(\d{4}\.\d{2}\.\d{2})", # 2024.10.07
-    r"(\d{2}-\d{2}-\d{4})",   # 07-10-2024
+    r"(\d{2}/\d{2}/\d{4})",     # 10/07/2024
+    r"(\d{4}\.\d{2}\.\d{2})",   # 2024.10.07
+    r"(\d{2}-\d{2}-\d{4})",     # 07-10-2024
 ]
 
 # --------------------------------------------------------------------------- #
-# 2. Utilidades internas
+# 2 · Utilidades internas
 # --------------------------------------------------------------------------- #
 
 
 def _read_tables(pdf_path: str) -> List[pd.DataFrame]:
-    """Lee todas las tablas de un PDF usando tabula-py."""
+    """Lee todas las tablas de un PDF con tabula-py."""
     return tabula.read_pdf(pdf_path, **TABULA_OPTIONS)
 
 
 def _standardize(df: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """Normaliza columnas y descarta tablas vacías o irrelevantes."""
-    if df.empty or df.shape[1] < 10:
+    """
+    Convierte cada tabla a formato uniforme y descarta las irrelevantes.
+    Si la tabla es únicamente la fila-categoría (1-3 columnas), la
+    preserva para que luego se propague la especie.
+    """
+    if df.empty:
         return None
 
-    # Renombra columnas con índice genérico
+    first_cell = str(df.iloc[0, 0]).strip()
+
+    # —— Mini-tabla con título de sección (fila-categoría) ——
+    if df.shape[1] < 4 and SPECIES_PATTERN.match(first_cell):
+        # Crea una fila con 'product_name' = categoría y el resto NaN
+        header_row = pd.DataFrame(
+            {"product_name": [first_cell]},
+            columns=["product_name"],
+        )
+        # Rellena columnas faltantes con NaN y reordena
+        for col in COLUMN_NAMES:
+            if col not in header_row.columns:
+                header_row[col] = np.nan
+        header_row = header_row[COLUMN_NAMES]
+        return header_row
+
+    # —— Tablas que sí contienen datos útiles ——
+    if df.shape[1] < 10:                # tablas muy pequeñas → descartar
+        return None
+
+    # Renombra con índice genérico
     df.columns = [f"col_{i}" for i in range(df.shape[1])]
 
-    # Añade columnas faltantes hasta cubrir el total esperado
+    # Añade columnas vacías hasta completar las 14 esperadas
     while df.shape[1] < len(COLUMN_NAMES):
         df[f"col_{df.shape[1]}"] = np.nan
 
@@ -90,13 +114,12 @@ def _standardize(df: pd.DataFrame) -> Optional[pd.DataFrame]:
 
 
 def _is_header_row(row: pd.Series) -> bool:
-    """Detecta filas de cabecera/sección que deben eliminarse."""
-    name = str(row["product_name"]).strip().upper()
-    return bool(SPECIES_PATTERN.match(name))
+    """Detecta filas de cabecera/fragmento ahora sobrantes."""
+    return bool(SPECIES_PATTERN.match(str(row["product_name"]).strip()))
 
 
 def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
-    """Convierte columnas numéricas que vienen como string a float."""
+    """Convierte columnas numéricas en float."""
     numeric_cols = [
         "unit_weight",
         "pallet_quantity",
@@ -119,7 +142,6 @@ def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _extract_first_match(patterns: List[str], text: str) -> Optional[str]:
-    """Devuelve la primera coincidencia de una lista de patrones RegEx."""
     for pat in patterns:
         m = re.search(pat, text)
         if m:
@@ -128,7 +150,7 @@ def _extract_first_match(patterns: List[str], text: str) -> Optional[str]:
 
 
 def extract_effective_date(pdf_path: str | pathlib.Path) -> Optional[datetime]:
-    """Obtiene la fecha efectiva desde el nombre o texto del PDF."""
+    """Extrae la fecha efectiva del nombre del archivo."""
     stem = pathlib.Path(pdf_path).stem
     match = _extract_first_match(DATE_PATTERNS, stem)
     if match:
@@ -141,76 +163,72 @@ def extract_effective_date(pdf_path: str | pathlib.Path) -> Optional[datetime]:
 
 
 def extract_plant_location(pdf_path: str | pathlib.Path) -> str:
-    """Ejemplo: 'STATESVILLE' desde '2024.10.07 Statesville.pdf'."""
+    """Ej.: 'STATESVILLE' desde '2024.10.07 Statesville.pdf'."""
     return pathlib.Path(pdf_path).stem.split()[-1].upper()
 
 
 # --------------------------------------------------------------------------- #
-# 3. Agregar columna `species`
+# 3 · Columna `species`
 # --------------------------------------------------------------------------- #
 
 
 def add_species_column(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Crea la columna 'species' tomando el título de cada sección
-    (Aquaculture, Cattle, etc.) y propagándolo hacia abajo.
-    """
-    species_values: List[str] = []
-    current_species: Optional[str] = None
+    """Propaga la especie (categoría) a cada fila de producto."""
+    species_vals: List[str] = []
+    current: Optional[str] = None
 
     for _, row in df.iterrows():
         name = str(row["product_name"]).strip()
         if SPECIES_PATTERN.match(name):
-            current_species = name.split("-")[0].strip().upper()
-            species_values.append(None)  # se eliminará luego
+            current = name.split("-")[0].strip().upper()
+            species_vals.append(None)   # placeholder; se eliminará
         else:
-            species_values.append(current_species)
+            species_vals.append(current)
 
-    df["species"] = species_values
+    df["species"] = species_vals
     df = df[df["species"].notna()].reset_index(drop=True)
     return df
 
 
 # --------------------------------------------------------------------------- #
-# 4. Función principal
+# 4 · Función principal
 # --------------------------------------------------------------------------- #
 
 
 def read_file(pdf: str | pathlib.Path) -> pd.DataFrame:
-    """Procesa un PDF y devuelve un DataFrame limpio y normalizado."""
+    """
+    Procesa un PDF y devuelve un DataFrame limpio con la columna species.
+    """
     tables = _read_tables(str(pdf))
-
     std_tables = [t for t in (_standardize(x) for x in tables) if t is not None]
     if not std_tables:
         return pd.DataFrame()
 
     df = pd.concat(std_tables, ignore_index=True)
 
-    # 1) Inserta y propaga categoría antes de filtrar cabeceras
+    # 1) Propaga species antes de filtrar cabeceras
     df = add_species_column(df)
 
-    # 2) Elimina filas de cabecera/fragmento
+    # 2) Elimina las filas-categoría ya procesadas
     df = df[~df.apply(_is_header_row, axis=1)].reset_index(drop=True)
     df.dropna(how="all", inplace=True)
 
-    # Metadatos (únicos por archivo)
+    # Metadatos por archivo
     df["plant_location"] = extract_plant_location(pdf)
     df["date_inserted"] = extract_effective_date(pdf)
     df["source"] = pathlib.Path(pdf).name
 
     df = _fix_numeric(df)
 
-    # Orden final de columnas
     return df[
         [*COLUMN_NAMES, "plant_location", "date_inserted", "source", "species"]
     ]
 
 
 # --------------------------------------------------------------------------- #
-# 5. Ejecución directa (debug rápido)
+# 5 · Prueba rápida
 # --------------------------------------------------------------------------- #
 
 if __name__ == "__main__":
-    sample_file = "2024.10.07 Statesville.pdf"
-    demo_df = read_file(sample_file)
-    print(demo_df.head())
+    demo = read_file("2024.10.07 Statesville.pdf")
+    print(demo[["product_name", "species"]].head(25))
