@@ -1,167 +1,209 @@
 """
-Purina horizontal PDF  →  DataFrame (20 columnas)
+Lectura y limpieza de PDFs.
+
+• Conservar la primera línea de datos real (descartar cabeceras repetidas)
+• Normalizar tipos numéricos
+• Añadir metadatos: plant_location, date_inserted, source
+• NUEVO: agregar columna `species` propagando la categoría (Aquaculture, Cattle, etc.)
 """
 
 from __future__ import annotations
-import datetime as dt
-import pathlib, re
-from typing import List, Optional, Union
 
+import pathlib
+import re
+from datetime import datetime
+from typing import Final, List, Optional
+
+import numpy as np
 import pandas as pd
 import tabula
-from PyPDF2 import PdfReader
 
 # --------------------------------------------------------------------------- #
-# 1. Columnas estándar
+# 1. Parámetros configurables
 # --------------------------------------------------------------------------- #
-COLUMN_NAMES: List[str] = [
-    "product_number", "formula_code", "product_name", "product_form",
-    "unit_weight", "pallet_quantity", "stocking_status", "min_order_quantity",
-    "days_lead_time", "fob_or_dlv", "price_change", "list_price",
-    "full_pallet_price", "half_load_full_pallet_price",
-    "full_load_full_pallet_price", "full_load_best_price",
+
+COLUMN_NAMES: Final[List[str]] = [
+    "product_number",
+    "formula_code",
+    "product_name",
+    "product_form",
+    "unit_weight",
+    "pallet_quantity",
+    "stocking_status",
+    "min_order_quantity",
+    "days_lead_time",
+    "fob_or_dlv",
+    "price_change",
+    "list_price",
+    "full_pallet_price",
+    "full_load_best_price",
 ]
 
-NUMERIC_COLS = COLUMN_NAMES[5:]  # de pallet_quantity en adelante
+TABULA_OPTIONS: Final[dict] = {
+    "pages": "all",
+    "guess": False,
+    "lattice": True,
+    "area": None,  # se usa área dinámica
+    "columns": None,
+}
+
+SPECIES_PATTERN: Final[re.Pattern] = re.compile(
+    r"^(AQUACULTURE|CATTLE.*?|GOAT|SHEEP|SWINE|POULTRY).*", re.IGNORECASE
+)
+
+DATE_PATTERNS: Final[List[str]] = [
+    r"(\d{2}/\d{2}/\d{4})",            # 10/07/2024
+    r"(\d{4}\.\d{2}\.\d{2})",          # 2024.10.07
+    r"(\d{2}-\d{2}-\d{4})",            # 07-10-2024
+]
 
 # --------------------------------------------------------------------------- #
-# 2. Metadatos
+# 2. Utilidades internas
 # --------------------------------------------------------------------------- #
-_DATE_PAT = re.compile(r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*Effective\s*Date", re.I)
 
-def extract_effective_date(pdf: Union[str, pathlib.Path]) -> str:
-    txt = PdfReader(str(pdf)).pages[0].extract_text()
-    m = _DATE_PAT.search(txt)
-    if not m:
-        return ""
-    raw = m.group(1)
-    sep = "/" if "/" in raw else "-"
-    mm, dd, yy = raw.split(sep)
-    yy = "20" + yy if len(yy) == 2 else yy
-    return f"{mm}{sep}{dd}{sep}{yy}"
 
-def extract_plant_location(pdf: Union[str, pathlib.Path]) -> str:
-    try:
-        tbl = tabula.read_pdf(pdf, pages=1, area=[0,650,60,1000],
-                              lattice=False, guess=False,
-                              pandas_options={"header":None,"dtype":str})[0]
-        text = " ".join(tbl.fillna("").values.flatten())
-        m = re.search(r"-\s*([A-Za-z &.\-]+?)\s+([A-Za-z]{2})\b", text)
-        return f"{m.group(1).strip().upper()} {m.group(2).upper()}" if m else ""
-    except Exception:
-        return ""
+def _read_tables(pdf_path: str) -> List[pd.DataFrame]:
+    """Lee todas las tablas de un PDF usando tabula-py."""
+    return tabula.read_pdf(pdf_path, **TABULA_OPTIONS)
 
-# --------------------------------------------------------------------------- #
-# 3. Lectura y normalización
-# --------------------------------------------------------------------------- #
-def _read_tables(pdf: str):
-    return tabula.read_pdf(pdf, pages="all", lattice=True, guess=False,
-                           pandas_options={"header":None,"dtype":str})
 
-def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
-    if tbl.shape[1] < 16:
+def _standardize(df: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """Normaliza columnas y descarta tablas vacías o irrelevantes."""
+    if df.empty or df.shape[1] < 10:
         return None
-    core = tbl.iloc[:, -16:].copy()
-    core.columns = COLUMN_NAMES
-    return core
 
-# --------------------------------------------------------------------------- #
-# 4. Propagar categoría
-# --------------------------------------------------------------------------- #
-_TITLE_RE = re.compile(r"^[A-Z][A-Z\s/&\-]{4,}$")   # solo mayúsculas, ≥4 letras
+    df.columns = [f"col_{i}" for i in range(df.shape[1])]
 
-def _add_species(df: pd.DataFrame) -> pd.DataFrame:
-    price_cols = [
-        "list_price", "full_pallet_price",
-        "half_load_full_pallet_price", "full_load_full_pallet_price",
-        "full_load_best_price",
-    ]
-    def first_text(row):
-        for v in row:
-            t = str(v).strip()
-            if t:
-                return t
-        return ""
-    first = df.apply(first_text, axis=1)
-    price_sum = (df[price_cols]
-                 .fillna(0)
-                 .apply(pd.to_numeric, errors="coerce")
-                 .sum(axis=1))
+    # Rellena columnas faltantes para igualar longitud final
+    while df.shape[1] < len(COLUMN_NAMES):
+        df[f"col_{df.shape[1]}"] = np.nan
 
-    # ****** CORRECCIÓN CLAVE ******
-    is_title = (
-        first.str.fullmatch(_TITLE_RE).fillna(False) &      # texto mayúsc.
-        df["formula_code"].isna() &                         # formula_code vacío
-        (df["product_number"].isna() |                      # product_number vacío
-         ~df["product_number"].astype(str).str[0].str.isdigit()) &
-        (price_sum == 0)                                    # sin precios
-    )
-    # ********************************
-
-    df["species"] = None
-    df.loc[is_title, "species"] = first[is_title]
-    df["species"] = df["species"].ffill()
-
-    return df[~is_title].reset_index(drop=True)
-
-# --------------------------------------------------------------------------- #
-# 5. Cabeceras de página
-# --------------------------------------------------------------------------- #
-_HEADER_TOKENS = {"PRODUCT", "FORM", "UNIT", "WEIGHT", "PALLET",
-                  "STOCKING", "STATUS", "PRICE", "DOLLAR"}
-
-def _is_header(row: pd.Series) -> bool:
-    first = str(row.iloc[0]).strip()
-    if first and not first[0].isdigit():
-        combined = " ".join(row.astype(str)).upper()
-        if any(tok in combined for tok in _HEADER_TOKENS):
-            return True
-    return False
-
-# --------------------------------------------------------------------------- #
-# 6. Conversión numérica
-# --------------------------------------------------------------------------- #
-def _to_float(x):
-    if pd.isna(x):
-        return None
-    s = str(x).replace(",", "").strip()
-    sign = -1 if s.endswith("-") or (s.startswith("(") and s.endswith(")")) else 1
-    s = s.strip("()- ")
-    try:   return float(s) * sign
-    except ValueError: return None
-
-def _fix_numeric(df: pd.DataFrame):
-    for col in NUMERIC_COLS:
-        df[col] = df[col].apply(_to_float)
+    df = df.iloc[:, : len(COLUMN_NAMES)]
+    df.columns = COLUMN_NAMES
     return df
 
+
+def _is_header_row(row: pd.Series) -> bool:
+    """Detecta filas de cabecera / sección que deben eliminarse."""
+    name = str(row["product_name"]).strip().upper()
+    return bool(SPECIES_PATTERN.match(name))
+
+
+def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    """Convierte columnas numéricas que llegan como string a float/int."""
+    numeric_cols = [
+        "unit_weight",
+        "pallet_quantity",
+        "min_order_quantity",
+        "days_lead_time",
+        "price_change",
+        "list_price",
+        "full_pallet_price",
+        "full_load_best_price",
+    ]
+    for col in numeric_cols:
+        df[col] = (
+            df[col]
+            .astype(str)
+            .str.replace(",", "", regex=False)
+            .replace({"": np.nan, "nan": np.nan})
+            .astype(float)
+        )
+    return df
+
+
+def _extract_first_match(patterns: List[str], text: str) -> Optional[str]:
+    for pat in patterns:
+        if (m := re.search(pat, text)):
+            return m.group(1)
+    return None
+
+
+def extract_effective_date(pdf_path: str | pathlib.Path) -> Optional[datetime]:
+    """Saca la fecha efectiva del nombre o del texto del PDF."""
+    pdf_path = pathlib.Path(pdf_path)
+    txt = pdf_path.stem  # nombre de archivo sin extensión
+    match = _extract_first_match(DATE_PATTERNS, txt)
+    if match:
+        for fmt in ("%m/%d/%Y", "%Y.%m.%d", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(match, fmt)
+            except ValueError:
+                continue
+    return None
+
+
+def extract_plant_location(pdf_path: str | pathlib.Path) -> str:
+    """Ej. «STATESVILLE» sacado del nombre del PDF."""
+    return pathlib.Path(pdf_path).stem.split()[-1].upper()
+
+
 # --------------------------------------------------------------------------- #
-# 7. read_file main
+# 3. Agregar columna `species`
 # --------------------------------------------------------------------------- #
-def read_file(pdf: Union[str, pathlib.Path]) -> pd.DataFrame:
+
+
+def add_species_column(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Crea la columna 'species' con la categoría (Aquaculture, Cattle, etc.).
+    Propaga hacia abajo el valor hasta la siguiente categoría.
+    """
+    species_values: List[str] = []
+    current_species: Optional[str] = None
+
+    for _, row in df.iterrows():
+        name = str(row["product_name"]).strip()
+        if SPECIES_PATTERN.match(name):
+            # Es una fila de categoría; guarda el nombre y no la añadimos
+            current_species = name.split("-")[0].strip().upper()
+            species_values.append(None)  # placeholder; se eliminará luego
+        else:
+            species_values.append(current_species)
+
+    df["species"] = species_values
+    # Elimina las filas que contienen solo el título de categoría
+    df = df[df["species"].notna()].reset_index(drop=True)
+    return df
+
+
+# --------------------------------------------------------------------------- #
+# 4. Función principal
+# --------------------------------------------------------------------------- #
+
+
+def read_file(pdf: str | pathlib.Path) -> pd.DataFrame:
+    # Procesa un PDF y devuelve un DataFrame limpio y estandarizado.
     tables = _read_tables(str(pdf))
-    std  = [t for t in (_standardize(x) for x in tables) if t is not None]
-    if not std:
+
+    # Normaliza cada tabla y descarta las vacías
+    std_tables = [t for t in (_standardize(x) for x in tables) if t is not None]
+    if not std_tables:
         return pd.DataFrame()
 
-    df = pd.concat(std, ignore_index=True)
-    df = _add_species(df)                           # ← categoría primero
-    df = df[~df.apply(_is_header, axis=1)].reset_index(drop=True)
+    df = pd.concat(std_tables, ignore_index=True)
+    # Inserta y propaga categoría antes de filtrar header
+    df = add_species_column(df)
+
+    # Elimina cabeceras/fragmentos pero conserva la primera fila de datos real
+    df = df[~df.apply(_is_header_row, axis=1)].reset_index(drop=True)
     df.dropna(how="all", inplace=True)
 
+    # Metadatos
     df["plant_location"] = extract_plant_location(pdf)
-    df["date_inserted"]  = extract_effective_date(pdf)
-    df["source"]         = pathlib.Path(pdf).name
+    df["date_inserted"] = extract_effective_date(pdf)
+    df["source"] = pathlib.Path(pdf).name
 
     df = _fix_numeric(df)
-    return df[[*COLUMN_NAMES, "plant_location", "date_inserted", "source", "species"]]
+    return df[
+        [*COLUMN_NAMES, "plant_location", "date_inserted", "source", "species"]
+    ]
+
 
 # --------------------------------------------------------------------------- #
-# 8. Test
+# 5. Ejecución directa (debug)
 # --------------------------------------------------------------------------- #
+
 if __name__ == "__main__":
-    import sys, pandas as pd
-    pdf = sys.argv[1]
-    frame = read_file(pdf)
-    print(frame.head())
-    print("Species únicas:", frame["species"].dropna().unique()[:10])
+    sample = "2024.10.07 Statesville.pdf"
+    DF = read_file(sample)
+    print(DF.head())
