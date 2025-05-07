@@ -1,33 +1,5 @@
-# ------------------------------------------------------------------ #
-# PARCHE ÚNICO para poblar la columna `species`                      #
-# Detecta el encabezado donde sea que Tabula lo deje y lo propaga.   #
-# ------------------------------------------------------------------ #
-import re
-TITLE_RE = re.compile(r"^[A-Z][A-Z\s/&\-]{2,}$")  # texto 100 % mayúsculas
+print(">>> species únicos antes de subir:", df["species"].dropna().unique()[:5])
+print(">>> filas con species no nulo   :", df["species"].notna().sum())
 
-# 1) Primer texto que encuentra la fila (sin importar la columna)
-first_text = (
-    df.fillna("")                                # NaN → ""
-      .apply(lambda r: next((v for v in r if str(v).strip()), ""), axis=1)
-)
-
-# 2) Una fila es TÍTULO si:
-#    ─ el texto cumple el patrón de mayúsculas, y
-#    ─ la suma de todos los precios es 0 / NaN
-price_cols = [
-    "list_price", "full_pallet_price", "half_load_full_pallet_price",
-    "full_load_full_pallet_price", "full_load_best_price",
-]
-is_title = (
-    first_text.str.fullmatch(TITLE_RE).fillna(False) &
-    (df[price_cols].fillna(0).sum(axis=1) == 0)
-)
-
-# 3) Creamos y propagamos la columna `species`
-df["species"] = None
-df.loc[is_title, "species"] = first_text[is_title].str.upper()
-df["species"] = df["species"].ffill()
-
-# 4) Quitamos las filas-título (ya se propagaron)
-df = df[~is_title].reset_index(drop=True)
-# ------------------------------------------------------------------ #
+print(">>> columnas Parquet:", list(df.columns))
+print(">>> species únicos en Parquet:", df["species"].dropna().unique()[:5])
