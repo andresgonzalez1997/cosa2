@@ -1,40 +1,248 @@
-AQUACULTURE
-CATTLE - ACCURATION/SPR BLOCKS
-CATTLE - PROTEIN TUBS
-CATTLE - MINERAL TUBS
-CATTLE - WEATHERIZED MINERAL
-CATTLE - STARTERS
-CATTLE - FINISHERS
-CATTLE - RANGE SUPPLEMENTS
-SHEEP
-ALL PURPOSE LIVESTOCK
-DEER/GAME
-FAMILY FLOCK
-FAMILY FLOCK ORGANIC
-GAME BIRD
-GOAT
-GRAINLAND
-HORSE
-TRIPLE CROWN HORSE
-MAZURI BIRD/RATITE
-MAZURI HERBIVORE
-MAZURI KOI / AQUATIC
-MAZURI ALPACA/LLAMA
-MAZURI MINIPIG
-MAZURI OTHER
-MAZURI PRIMATE
-MAZURI RODENT
-MAZURI SMALL PACK
-SPECIALTY MILK REPLACERS
-MILK REPLACER - FULL POTENTIAL
-MILK REPLACER - GROWTH
-CALF CARE SUPPLEMENTS
-PET FOOD - EXCLUSIVE PRODUCTS
-PET FOOD - INFINIA PRODUCTS
-PET FOOD - RED FLANNEL
-PET FOOD - PMI TRADITIONAL
-RABBIT
-PREMIUM SHOW DIETS
-WILD BIRD
-SWINE RETAIL
-PLF CATTLE
+# purina_file_horizontal.py  – rev. 2025-05-09b  (Python 3.7 / CDSW)
+"""
+Extrae listas de precio horizontales Purina y devuelve DataFrame con:
+
+    16 columnas estándar +
+    plant_location + date_inserted + source + species   → 20 columnas fijas
+"""
+
+from __future__ import annotations
+import datetime as _dt
+import pathlib
+import re
+from typing import List, Optional, Union
+
+import pandas as pd
+import tabula
+from PyPDF2 import PdfReader
+
+
+# ─────────────────────────── 1.  Columnas estándar ───────────────────────────
+COLUMN_NAMES: List[str] = [
+    "product_number", "formula_code", "product_name", "product_form",
+    "unit_weight", "pallet_quantity", "stocking_status", "min_order_quantity",
+    "days_lead_time", "fob_or_dlv", "price_change", "list_price",
+    "full_pallet_price", "half_load_full_pallet_price",
+    "full_load_full_pallet_price", "full_load_best_price",
+]
+NUMERIC_COLS = [
+    "pallet_quantity", "min_order_quantity", "days_lead_time"
+] + COLUMN_NAMES[10:]
+
+# ─────────────────────────── 2.  Lista oficial de species ────────────────────
+OFFICIAL_SPECIES = [
+    "AQUACULTURE", "CATTLE - ACCURATION/SPR BLOCKS", "CATTLE - PROTEIN TUBS",
+    "CATTLE - MINERAL TUBS", "CATTLE - WEATHERIZED MINERAL",
+    "CATTLE - STARTERS", "CATTLE - FINISHERS", "CATTLE - RANGE SUPPLEMENTS",
+    "SHEEP", "ALL PURPOSE LIVESTOCK", "DEER/GAME", "FAMILY FLOCK",
+    "FAMILY FLOCK ORGANIC", "GAME BIRD", "GOAT", "GRAINLAND", "HORSE",
+    "TRIPLE CROWN HORSE", "MAZURI BIRD/RATITE", "MAZURI HERBIVORE",
+    "MAZURI KOI / AQUATIC", "MAZURI ALPACA/LLAMA", "MAZURI MINIPIG",
+    "MAZURI OTHER", "MAZURI PRIMATE", "MAZURI RODENT", "MAZURI SMALL PACK",
+    "SPECIALTY MILK REPLACERS", "MILK REPLACER - FULL POTENTIAL",
+    "MILK REPLACER - GROWTH", "CALF CARE SUPPLEMENTS",
+    "PET FOOD - EXCLUSIVE PRODUCTS", "PET FOOD - INFINIA PRODUCTS",
+    "PET FOOD - RED FLANNEL", "PET FOOD - PMI TRADITIONAL", "RABBIT",
+    "PREMIUM SHOW DIETS", "WILD BIRD", "SWINE RETAIL", "PLF CATTLE",
+]
+SPECIES_SET = {s.upper(): s for s in OFFICIAL_SPECIES}  # dict para conservar formato
+
+
+# ─────────────────────────── 3.  Utilidades fecha / planta ───────────────────
+_DATE_RX = [
+    re.compile(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*Effective\s+Date', re.I),
+    re.compile(r'Effective\s+Date\s*[-–—]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', re.I),
+]
+
+
+def extract_effective_date(pdf_path: Union[str, pathlib.Path]) -> _dt.date:
+    txt = PdfReader(str(pdf_path)).pages[0].extract_text()
+    for rx in _DATE_RX:
+        m = rx.search(txt)
+        if m:
+            mm, dd, yy = re.split("[/-]", m.group(1))
+            if len(yy) == 2:
+                yy = "20" + yy
+            return _dt.date(int(yy), int(mm), int(dd))
+    raise ValueError("Fecha efectiva no encontrada.")
+
+
+def extract_plant_location(pdf_path: Union[str, pathlib.Path]) -> str:
+    try:
+        t = tabula.read_pdf(
+            pdf_path, pages=1, area=[0, 650, 60, 1000],
+            lattice=False, guess=False,
+            pandas_options={"header": None, "dtype": str},
+        )[0]
+        text = " ".join(t.fillna("").values.flatten())
+        m = re.search(r"-\s*([\w &.\-]+?)\s+([A-Za-z]{2})\b", text)
+        return f"{m.group(1).strip().upper()} {m.group(2).upper()}" if m else "PLANTA DESCONOCIDA"
+    except Exception:
+        return "PLANTA DESCONOCIDA"
+
+
+# ─────────────────────────── 4.  Lectura Tabula ──────────────────────────────
+def _read_tables(pdf: Union[str, pathlib.Path]):
+    try:
+        return tabula.read_pdf(
+            pdf, pages="all", lattice=True, guess=False,
+            pandas_options={"dtype": str, "header": None},
+        )
+    except Exception as exc:
+        print("[tabula]", exc)
+        return []
+
+
+# ─────────────────────────── 5.  Normalizar ancho = 16 ───────────────────────
+def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
+    # elimina columnas vacías al final
+    while tbl.shape[1] > 0 and tbl.iloc[:, -1].isna().all():
+        tbl = tbl.iloc[:, :-1]
+    if tbl.shape[1] < 16:
+        return None
+
+    if tbl.shape[1] > 16:
+        best_start, best_score = 0, -1
+        row0 = tbl.iloc[0].astype(str)
+        for s in range(tbl.shape[1] - 15):
+            slice_ = row0.iloc[s:s + 16]
+            score = slice_.str.replace(",", "").str.strip() \
+                          .str.match(r"^-?[\d.]+$").sum()
+            if score > best_score:
+                best_start, best_score = s, score
+        tbl = tbl.iloc[:, best_start:best_start + 16]
+
+    tbl.columns = COLUMN_NAMES
+    return tbl
+
+
+# ─────────────────────────── 6.  Conversión numérica ─────────────────────────
+def _to_float(v):
+    if pd.isna(v):
+        return None
+    s = str(v).replace(",", "").strip()
+    sign = -1 if s.endswith("-") or (s.startswith("(") and s.endswith(")")) else 1
+    s = s.strip("()- ")
+    try:
+        return float(s) * sign
+    except ValueError:
+        return None
+
+
+def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    for c in NUMERIC_COLS:
+        if c in df.columns:
+            df[c] = df[c].apply(_to_float)
+    return df
+
+
+# ─────────────────────────── 7.  Filas-cabecera / fragmentos ─────────────────
+_HEADER_TOKENS = {
+    "PRODUCT", "FORM", "UNIT", "WEIGHT", "PALLET", "MIN", "ORDER", "QUANTITY",
+    "DAYS", "LEAD", "TIME", "STOCKING", "STATUS", "FOB", "DLV",
+}
+_PRICE_RE = re.compile(
+    "|".join(re.escape(p) for p in (
+        "PRICE / UNIT", "PRICE IN US DOLLAR", "PRICE IN US DOLLARS",
+        "MIN / DAYS", "FORMULA CODE", "MONTHLY", "PAGE",
+    )), re.I
+)
+
+
+def _is_header_row(row: pd.Series) -> bool:
+    text = " ".join(row.astype(str)).upper()
+    if _PRICE_RE.search(text):
+        return True
+    first = str(row.iloc[0]).strip().upper()
+    if "FORMULA" in text and "PRODUCT" in text:
+        return True
+    if first.startswith("PRODUCT") and str(row.iloc[1]).upper().startswith("FORMULA"):
+        return True
+    if pd.isna(row["list_price"]) and any(tok in text for tok in _HEADER_TOKENS):
+        return True
+    return False
+
+
+# ─────────────────────────── 8.  Species con lista oficial ───────────────────
+def _clean_title(text: str) -> str:
+    """Mayúsculas y un solo espacio entre palabras."""
+    return re.sub(r"\s+", " ", text.strip().upper())
+
+
+def _match_species(candidate: str) -> Optional[str]:
+    """Devuelve species oficial si el candidato coincide (exacto o prefix)."""
+    cand = _clean_title(candidate)
+    if cand in SPECIES_SET:
+        return SPECIES_SET[cand]
+    for off in SPECIES_SET:
+        if cand.startswith(off):            # tolera cabeceras truncadas
+            return SPECIES_SET[off]
+    return None
+
+
+def _assign_species(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    • Detecta filas-título (product_number vacío o no numérico).
+    • Busca coincidencia con lista oficial → species.
+    • Elimina todas las filas-título.
+    • Propaga species a los productos siguientes.
+    """
+    current = None
+    keep_idx, species_col = [], []
+
+    for idx, pn in df["product_number"].fillna("").astype(str).iteritems():
+        pn = pn.strip()
+        if pn == "" or not pn[0].isdigit():
+            title = " ".join(df.loc[idx].fillna("").astype(str)).strip()
+            matched = _match_species(title)
+            if matched:
+                current = matched
+            # En cualquier caso, descarta la fila.
+            continue
+
+        keep_idx.append(idx)
+        species_col.append(current)
+
+    clean = df.loc[keep_idx].reset_index(drop=True)
+    clean["species"] = species_col
+    return clean
+
+
+# ─────────────────────────── 9.  FUNCIÓN PRINCIPAL ──────────────────────────
+def read_file(pdf_path: Union[str, pathlib.Path]) -> pd.DataFrame:
+    tables = _read_tables(pdf_path)
+    if not tables:
+        return pd.DataFrame()
+
+    frames = []
+    for raw in tables:
+        std = _standardize(raw)
+        if std is None:
+            continue
+
+        std = std[~std.apply(_is_header_row, axis=1)].reset_index(drop=True)
+        std.dropna(how="all", inplace=True)
+        if std.empty:
+            continue
+
+        std = _assign_species(std)
+        if std.empty:
+            continue
+
+        frames.append(std)
+
+    if not frames:
+        return pd.DataFrame()
+
+    df = pd.concat(frames, ignore_index=True)
+    df = _fix_numeric(df)
+
+    # Metadatos
+    df["plant_location"] = extract_plant_location(pdf_path)
+    df["date_inserted"] = extract_effective_date(pdf_path).strftime("%Y-%m-%d")
+    df["source"] = pathlib.Path(pdf_path).name
+
+    final_cols = COLUMN_NAMES + [
+        "plant_location", "date_inserted", "source", "species"
+    ]
+    return df.loc[:, final_cols]
