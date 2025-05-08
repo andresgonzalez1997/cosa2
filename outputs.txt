@@ -387,3 +387,155 @@ def read_file(pdf: str|pathlib.Path) -> pd.DataFrame:
     result = pd.concat(all_dfs, ignore_index=True)
     return result[[*COLUMN_NAMES, "plant_location", "date_inserted", "source", "species"]]
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+from __future__ import annotations
+import datetime as _dt
+import pathlib
+import re
+from typing import List, Optional
+from pathlib import Path
+from PyPDF2 import PdfReader
+import pandas as pd
+import tabula
+
+# 1. Nombres estándar (16 columnas del PDF original)
+COLUMN_NAMES: List[str] = [
+    "product_number","formula_code","product_name","product_form","unit_weight",
+    "pallet_quantity","stocking_status","min_order_quantity","days_lead_time",
+    "fob_or_dlv","price_change","list_price","full_pallet_price",
+    "half_load_full_pallet_price","full_load_full_pallet_price","full_load_best_price",
+]
+
+# 2. Columnas numéricas
+NUMERIC_COLS: List[str] = ["pallet_quantity","min_order_quantity","days_lead_time"] + COLUMN_NAMES[10:]
+
+# 3. Títulos válidos (species)
+VALID_TITLES = [
+    "AQUACULTURE","CATTLE - ACCURATION/SPR BLOCKS","CATTLE - PROTEIN TUBS",
+    # … resto de tus títulos …
+    "SWINE RETAIL","PLF CATTLE",
+]
+
+# 4. Patrones auxiliares
+_DATE_PATTERNS = [
+    re.compile(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*Effective\s+Date', re.I),
+    re.compile(r'Effective\s+Date\s*[-–—]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', re.I),
+]
+HEADER_TOKENS = {"PRODUCT","FORM","UNIT","WEIGHT","PALLET","MIN","ORDER","QUANTITY","DAYS","LEAD","TIME","STOCKING","STATUS","FOB","DLV"}
+_PRICE_RE = re.compile("|".join([
+    "PRICE / UNIT","PRICE IN US DOLLAR","PRICE IN US DOLLARS","MIN / DAYS",
+    "FORMULA CODE","MONTHLY","PAGE"
+]), re.I)
+
+# 5. Utilidades Tabula y normalización
+def _read_tables(pdf, pages="all"):
+    try:
+        return tabula.read_pdf(pdf, pages=pages, lattice=True, guess=False,
+                               pandas_options={"dtype": str, "header": None})
+    except:
+        return []
+
+def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
+    if tbl.shape[1] < 16: return None
+    if tbl.shape[1] >= 17:
+        first, second = tbl.iloc[:,0], tbl.iloc[:,1]
+        shift = second.astype(str).str[0].str.isdigit().mean()>0.5
+        tbl = tbl.iloc[:,1:17] if shift else tbl.iloc[:,:16]
+    else:
+        tbl = tbl.iloc[:,:16]
+    tbl.columns = COLUMN_NAMES
+    return tbl
+
+def _is_header_row(row: pd.Series) -> bool:
+    combined = " ".join(row.astype(str)).upper()
+    if _PRICE_RE.search(combined): return True
+    first = str(row.iloc[0]).strip().upper()
+    if "FORMULA" in combined and "PRODUCT" in combined: return True
+    if first and first[0].isdigit(): return False
+    if first.startswith("PRODUCT") and str(row.iloc[1]).upper().startswith("FORMULA"): return True
+    if pd.isna(row["list_price"]) and any(tok in combined for tok in HEADER_TOKENS): return True
+    return False
+
+def _to_float(s: str):
+    if pd.isna(s): return None
+    s = str(s).replace(",","").strip()
+    sign = -1 if s.endswith("-") or (s.startswith("(") and s.endswith(")")) else 1
+    s = s.strip("()- ")
+    try: return float(s)*sign
+    except: return None
+
+def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    for col in NUMERIC_COLS:
+        if col in df: df[col] = df[col].apply(_to_float)
+    return df
+
+# 6. Fecha y planta
+def extract_effective_date(pdf_path: str|Path) -> _dt.date:
+    reader = PdfReader(str(pdf_path))
+    text = reader.pages[0].extract_text() or ""
+    for rx in _DATE_PATTERNS:
+        m = rx.search(text)
+        if m:
+            date_str = m.group(1)
+            sep = "/" if "/" in date_str else "-"
+            mm, dd, yy = date_str.split(sep)
+            if len(yy)==2: yy = "20"+yy
+            return _dt.datetime.strptime(f"{mm}{sep}{dd}{sep}{yy}",f"%m{sep}%d{sep}%Y").date()
+    raise ValueError("No se encontró la fecha efectiva.")
+
+def extract_plant_location(pdf_path: str|Path) -> str:
+    try:
+        tbls = tabula.read_pdf(pdf_path, pages=1, area=[0,650,60,1000],
+                               lattice=False, guess=False,
+                               pandas_options={"header":None,"dtype":str})
+        if not tbls: return "PLANTA DESCONOCIDA"
+        text = " ".join(tbls[0].fillna("").values.flatten())
+        m = re.search(r"-\s*([A-Za-z &.\-]+?)\s+([A-Za-z]{2})\b", text)
+        if m: return f"{m.group(1).strip().upper()} {m.group(2).upper()}"
+    except: pass
+    return "PLANTA DESCONOCIDA"
+
+# 7. Función principal con filtro de traslapes
+def read_file(pdf: str|pathlib.Path) -> pd.DataFrame:
+    all_dfs: List[pd.DataFrame] = []
+    reader = PdfReader(str(pdf))
+    for p in range(len(reader.pages)):
+        text = reader.pages[p].extract_text() or ""
+        # detectamos sólo títulos válidos
+        page_titles = [vt for vt in VALID_TITLES if vt in text.upper()]
+        tables = _read_tables(str(pdf), pages=p+1)
+        stds = [t for t in (_standardize(t) for t in tables) if t is not None]
+        for i, tbl in enumerate(stds):
+            dfc = tbl[~tbl.apply(_is_header_row, axis=1)].dropna(how="all").reset_index(drop=True)
+            # **nuevo**: filtramos sólo filas cuyo product_number empiece con dígito
+            dfc = dfc[dfc["product_number"].astype(str).str.match(r"^\d")].reset_index(drop=True)
+            spec = page_titles[i] if i < len(page_titles) else None
+            dfc["species"] = spec
+            dfc["plant_location"] = extract_plant_location(pdf)
+            dfc["date_inserted"]   = extract_effective_date(pdf)
+            dfc["source"]          = pathlib.Path(pdf).name
+            dfc = _fix_numeric(dfc)
+            all_dfs.append(dfc)
+    if not all_dfs: return pd.DataFrame()
+    result = pd.concat(all_dfs, ignore_index=True)
+    return result[[*COLUMN_NAMES, "plant_location", "date_inserted", "source", "species"]]
+
+
