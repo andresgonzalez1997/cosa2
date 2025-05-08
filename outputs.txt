@@ -1,208 +1,40 @@
-from __future__ import annotations
-import datetime as _dt
-import pathlib
-import re
-from typing import List, Optional
-from pathlib import Path
-from PyPDF2 import PdfReader
-import pandas as pd
-import tabula
-
-# --------------------------------------------------------------------------- #
-# 1. Nombres estándar (16 columnas del PDF original)
-# --------------------------------------------------------------------------- #
-COLUMN_NAMES: List[str] = [
-    "product_number",
-    "formula_code",
-    "product_name",
-    "product_form",
-    "unit_weight",
-    "pallet_quantity",
-    "stocking_status",
-    "min_order_quantity",
-    "days_lead_time",
-    "fob_or_dlv",
-    "price_change",
-    "list_price",
-    "full_pallet_price",
-    "half_load_full_pallet_price",
-    "full_load_full_pallet_price",
-    "full_load_best_price",
-]
-
-# --------------------------------------------------------------------------- #
-# 2. Columnas numéricas que se convertirán a float
-# --------------------------------------------------------------------------- #
-NUMERIC_COLS: List[str] = [
-    "pallet_quantity", "min_order_quantity", "days_lead_time",
-] + COLUMN_NAMES[10:]  # todas las columnas de precios
-
-# --------------------------------------------------------------------------- #
-# 3. Regex de patrones
-# --------------------------------------------------------------------------- #
-_DATE_PATTERNS = [
-    re.compile(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*Effective\s+Date', re.I),
-    re.compile(r'Effective\s+Date\s*[-–—]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', re.I),
-]
-
-HEADER_TOKENS = {
-    "PRODUCT", "FORM", "UNIT", "WEIGHT", "PALLET", "MIN", "ORDER",
-    "QUANTITY", "DAYS", "LEAD", "TIME", "STOCKING", "STATUS", "FOB", "DLV",
-}
-PRICE_HEADER_PATTERNS = (
-    "PRICE / UNIT",
-    "PRICE IN US DOLLAR",
-    "PRICE IN US DOLLARS",
-    "MIN / DAYS",
-    "FORMULA CODE",
-    "MONTHLY",
-    "PAGE",
-)
-_PRICE_RE = re.compile("|".join(re.escape(p) for p in PRICE_HEADER_PATTERNS), re.I)
-
-# --------------------------------------------------------------------------- #
-# 4. Utilidades Tabula
-# --------------------------------------------------------------------------- #
-def _read_tables(pdf: str | pathlib.Path, pages="all"):
-    try:
-        return tabula.read_pdf(
-            pdf,
-            pages=pages,
-            lattice=True,
-            guess=False,
-            pandas_options={"dtype": str, "header": None},
-        )
-    except Exception as exc:
-        print("[tabula]", exc)
-        return []
-
-def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """Recorta a 16 columnas y corrige desplazamientos (17 columnas)."""
-    if tbl.shape[1] < 16:
-        return None
-    if tbl.shape[1] >= 17:
-        first, second = tbl.iloc[:, 0], tbl.iloc[:, 1]
-        numeric_like = second.astype(str).str[0].str.isdigit().mean() > 0.5
-        tbl = tbl.iloc[:, 1:17] if numeric_like else tbl.iloc[:, :16]
-    else:
-        tbl = tbl.iloc[:, :16]
-    tbl.columns = COLUMN_NAMES
-    return tbl
-
-def _is_header_row(row: pd.Series) -> bool:
-    combined = " ".join(row.astype(str)).upper()
-    if _PRICE_RE.search(combined):
-        return True
-    first = str(row.iloc[0]).strip().upper()
-    if "FORMULA" in combined and "PRODUCT" in combined:
-        return True
-    if first and first[0].isdigit():
-        return False
-    if first.startswith("PRODUCT") and str(row.iloc[1]).upper().startswith("FORMULA"):
-        return True
-    if pd.isna(row["list_price"]) and any(tok in combined for tok in HEADER_TOKENS):
-        return True
-    return False
-
-def _to_float(s: str):
-    if pd.isna(s):
-        return None
-    s = str(s).replace(",", "").strip()
-    sign = -1 if s.endswith("-") or (s.startswith("(") and s.endswith(")")) else 1
-    s = s.strip("()- ")
-    try:
-        return float(s) * sign
-    except ValueError:
-        return None
-
-def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
-    for col in NUMERIC_COLS:
-        if col in df.columns:
-            df[col] = df[col].apply(_to_float)
-    return df
-
-# --------------------------------------------------------------------------- #
-# 5. Extracción de metadatos: fecha y planta
-# --------------------------------------------------------------------------- #
-def extract_effective_date(pdf_path: str | Path) -> _dt.date:
-    reader = PdfReader(str(pdf_path))
-    first_page_text = reader.pages[0].extract_text() or ""
-    for rx in _DATE_PATTERNS:
-        m = rx.search(first_page_text)
-        if m:
-            date_str = m.group(1)
-            sep = "/" if "/" in date_str else "-"
-            mm, dd, yy = date_str.split(sep)
-            if len(yy) == 2:
-                yy = "20" + yy
-            return _dt.datetime.strptime(f"{mm}{sep}{dd}{sep}{yy}", f"%m{sep}%d{sep}%Y").date()
-    raise ValueError("No se encontró la fecha efectiva en el PDF.")
-
-def extract_plant_location(pdf_path: str | Path) -> str:
-    try:
-        tables = tabula.read_pdf(
-            pdf_path,
-            pages=1,
-            area=[0, 650, 60, 1000],
-            lattice=False,
-            guess=False,
-            pandas_options={"header": None, "dtype": str},
-        )
-        if not tables:
-            return "PLANTA DESCONOCIDA"
-        text = " ".join(tables[0].fillna("").values.flatten())
-        m = re.search(r"-\s*([A-Za-z &.\-]+?)\s+([A-Za-z]{2})\b", text)
-        if m:
-            plant, state = m.groups()
-            return f"{plant.strip().upper()} {state.upper()}"
-        return "PLANTA DESCONOCIDA"
-    except Exception:
-        return "PLANTA DESCONOCIDA"
-
-# --------------------------------------------------------------------------- #
-# 6. Lectura principal con captura de títulos para species
-# --------------------------------------------------------------------------- #
-def read_file(pdf: str | pathlib.Path) -> pd.DataFrame:
-    """
-    Procesa un PDF página a página, extrae cada tabla y asigna como 'species'
-    el título (línea en mayúsculas sin dígitos) que aparece encima de la tabla.
-    Devuelve un DataFrame unificado con todos los metadatos.
-    """
-    all_dfs: List[pd.DataFrame] = []
-    reader = PdfReader(str(pdf))
-    num_pages = len(reader.pages)
-
-    for page_idx in range(num_pages):
-        # 1) Extraer texto y detectar posibles títulos
-        page_text = reader.pages[page_idx].extract_text() or ""
-        title_lines = [
-            ln.strip()
-            for ln in page_text.splitlines()
-            if re.fullmatch(r"[A-ZÁÉÍÓÚÑ &\-/]{4,}", ln.strip()) and not re.search(r"\d", ln)
-        ]
-
-        # 2) Leer tablas de esta página
-        page_tables = _read_tables(str(pdf), pages=page_idx+1)
-        std_tables = [df for df in (_standardize(tbl) for tbl in page_tables) if df is not None]
-
-        # 3) Procesar cada tabla estandarizada
-        for idx, df_tbl in enumerate(std_tables):
-            # Eliminar filas-cabecera y vacías
-            df_clean = df_tbl[~df_tbl.apply(_is_header_row, axis=1)].dropna(how="all").reset_index(drop=True)
-            # Asignar título correspondiente
-            title = title_lines[idx] if idx < len(title_lines) else (title_lines[-1] if title_lines else None)
-            df_clean["species"] = title
-            # Agregar metadatos
-            df_clean["plant_location"] = extract_plant_location(pdf)
-            df_clean["date_inserted"] = extract_effective_date(pdf)
-            df_clean["source"] = pathlib.Path(pdf).name
-            # Corregir numéricos
-            df_clean = _fix_numeric(df_clean)
-            all_dfs.append(df_clean)
-
-    if not all_dfs:
-        return pd.DataFrame()
-
-    # Concatenar y ordenar columnas
-    full = pd.concat(all_dfs, ignore_index=True)
-    return full[[*COLUMN_NAMES, "plant_location", "date_inserted", "source", "species"]]
+AQUACULTURE
+CATTLE - ACCURATION/SPR BLOCKS
+CATTLE - PROTEIN TUBS
+CATTLE - MINERAL TUBS
+CATTLE - WEATHERIZED MINERAL
+CATTLE - STARTERS
+CATTLE - FINISHERS
+CATTLE - RANGE SUPPLEMENTS
+SHEEP
+ALL PURPOSE LIVESTOCK
+DEER/GAME
+FAMILY FLOCK
+FAMILY FLOCK ORGANIC
+GAME BIRD
+GOAT
+GRAINLAND
+HORSE
+TRIPLE CROWN HORSE
+MAZURI BIRD/RATITE
+MAZURI HERBIVORE
+MAZURI KOI / AQUATIC
+MAZURI ALPACA/LLAMA
+MAZURI MINIPIG
+MAZURI OTHER
+MAZURI PRIMATE
+MAZURI RODENT
+MAZURI SMALL PACK
+SPECIALTY MILK REPLACERS
+MILK REPLACER - FULL POTENTIAL
+MILK REPLACER - GROWTH
+CALF CARE SUPPLEMENTS
+PET FOOD - EXCLUSIVE PRODUCTS
+PET FOOD - INFINIA PRODUCTS
+PET FOOD - RED FLANNEL
+PET FOOD - PMI TRADITIONAL
+RABBIT
+PREMIUM SHOW DIETS
+WILD BIRD
+SWINE RETAIL
+PLF CATTLE
