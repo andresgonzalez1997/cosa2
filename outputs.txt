@@ -1,212 +1,28 @@
-#-----------------------------------
-"""
-Lectura de PDFs horizontales Purina con detección robusta de ‘species’.
+ValueError: Fecha Effective Date no encontrada.
+ValueError                                Traceback (most recent call last)
+/tmp/ipykernel_114/1215835711.py in <module>
+      1 if __name__ == "__main__":
+----> 2     excecute_process()
 
-Uso rápido:
-    python purina_horizontal.py archivo.pdf          # imprime species
-    python purina_horizontal.py archivo.pdf --debug  # trazas de depuración
-"""
-from __future__ import annotations
-import datetime as _dt
-import pathlib
-import re
-from typing import List, Optional, Sequence
+/tmp/ipykernel_114/511133302.py in excecute_process()
+     35 
+     36         # Parsear (horizontal)
+---> 37         df = pfh.read_file(str(local_pdf_path))
+     38 
+     39         # Observa columnas
 
-import pandas as pd
-import tabula
-from PyPDF2 import PdfReader
+~/competitor_data/purina_file_horizontal.py in read_file(pdf, debug)
+    174     # Metadatos
+    175     df["plant_location"] = extract_plant_location(pdf)
+--> 176     df["date_inserted"] = extract_effective_date(pdf)
+    177     df["source"] = pathlib.Path(pdf).name
+    178 
 
+~/competitor_data/purina_file_horizontal.py in extract_effective_date(pdf)
+     59     m = _DATE_RX.search(txt)
+     60     if not m:
+---> 61         raise ValueError("Fecha Effective Date no encontrada.")
+     62     raw = m.group(1)
+     63     sep = "/" if "/" in raw else "-"
 
-# ──────────────────────────────── 1. Columnas básicas ─────────────────────────
-COLUMN_NAMES: Sequence[str] = [
-    "product_number", "formula_code", "product_name", "product_form",
-    "unit_weight", "pallet_quantity", "stocking_status", "min_order_quantity",
-    "days_lead_time", "fob_or_dlv", "price_change", "list_price",
-    "full_pallet_price", "half_load_full_pallet_price",
-    "full_load_full_pallet_price", "full_load_best_price",
-]
-
-NUMERIC_COLS: List[str] = [
-    "pallet_quantity", "min_order_quantity", "days_lead_time",
-] + list(COLUMN_NAMES[10:])
-
-
-# ─────────────────────────────── 2. Lista de categorías ───────────────────────
-ALL_SPECIES = [
-    "AQUACULTURE", "CATTLE - ACCURATION/SPR BLOCKS", "CATTLE - PROTEIN TUBS",
-    "CATTLE - MINERAL TUBS", "CATTLE - WEATHERIZED MINERAL", "CATTLE - STARTERS",
-    "CATTLE - FINISHERS", "CATTLE - RANGE SUPPLEMENTS", "SHEEP",
-    "ALL PURPOSE LIVESTOCK", "DEER/GAME", "FAMILY FLOCK", "FAMILY FLOCK ORGANIC",
-    "GAME BIRD", "GOAT", "GRAINLAND", "HORSE", "TRIPLE CROWN HORSE",
-    "MAZURI BIRD/RATITE", "MAZURI HERBIVORE", "MAZURI KOI / AQUATIC",
-    "MAZURI ALPACA/LLAMA", "MAZURI MINIPIG", "MAZURI OTHER", "MAZURI PRIMATE",
-    "MAZURI RODENT", "MAZURI SMALL PACK", "SPECIALTY MILK REPLACERS",
-    "MILK REPLACER - FULL POTENTIAL", "MILK REPLACER - GROWTH",
-    "CALF CARE SUPPLEMENTS", "PET FOOD - EXCLUSIVE PRODUCTS",
-    "PET FOOD - INFINIA PRODUCTS", "PET FOOD - RED FLANNEL",
-    "PET FOOD - PMI TRADITIONAL", "RABBIT", "PREMIUM SHOW DIETS", "WILD BIRD",
-    "SWINE RETAIL", "PLF CATTLE",
-]
-_SPECIES_UP = [s.upper() for s in ALL_SPECIES]
-
-
-# ─────────────────────────────── 3. Metadatos PDF ─────────────────────────────
-_DATE_RX = re.compile(r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}).*?Effective\s+Date", re.I)
-
-
-def extract_effective_date(pdf: str | pathlib.Path) -> _dt.date:
-    txt = PdfReader(str(pdf)).pages[0].extract_text()
-    m = _DATE_RX.search(txt)
-    if not m:
-        raise ValueError("Fecha Effective Date no encontrada.")
-    raw = m.group(1)
-    sep = "/" if "/" in raw else "-"
-    mm, dd, yy = raw.split(sep)
-    if len(yy) == 2:
-        yy = "20" + yy
-    return _dt.datetime.strptime(f"{mm}{sep}{dd}{sep}{yy}", f"%m{sep}%d{sep}%Y").date()
-
-
-def extract_plant_location(pdf: str | pathlib.Path) -> str:
-    try:
-        tbl = tabula.read_pdf(
-            pdf, pages=1, area=[0, 650, 60, 1000],
-            lattice=False, guess=False, pandas_options={"header": None, "dtype": str},
-        )[0]
-        text = " ".join(tbl.fillna("").values.flatten())
-        m = re.search(r"-\s*([A-Za-z &.\-]+?)\s+([A-Za-z]{2})\b", text)
-        return f"{m.group(1).strip().upper()} {m.group(2).upper()}" if m else "PLANTA DESCONOCIDA"
-    except Exception:
-        return "PLANTA DESCONOCIDA"
-
-
-# ─────────────────────────────── 4. Tablas y limpieza ─────────────────────────
-def _read_tables(pdf: str | pathlib.Path):
-    return tabula.read_pdf(
-        pdf, pages="all", lattice=True, guess=False,
-        pandas_options={"header": None, "dtype": str},
-    )
-
-
-def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
-    if tbl.shape[1] < 16:
-        return None
-    if tbl.shape[1] >= 17:
-        first, second = tbl.iloc[:, 0], tbl.iloc[:, 1]
-        numeric_like = second.astype(str).str[0].str.isdigit().mean() > 0.5
-        tbl = tbl.iloc[:, 1:17] if numeric_like else tbl.iloc[:, :16]
-    else:
-        tbl = tbl.iloc[:, :16]
-    tbl.columns = COLUMN_NAMES
-    return tbl
-
-
-# ─────────────────────────────── 5. Species (robusto) ─────────────────────────
-def _detect_category(row: pd.Series) -> Optional[str]:
-    """
-    Devuelve la especie si la fila es claramente la cabecera de categoría,
-    si no, None.
-    """
-    combined = " ".join(str(x) for x in row.iloc[:3] if pd.notna(x)).upper().strip()
-    for sp in _SPECIES_UP:
-        if combined.startswith(sp):
-            return ALL_SPECIES[_SPECIES_UP.index(sp)]
-    return None
-
-
-def add_species_column(df: pd.DataFrame, debug=False) -> pd.DataFrame:
-    df["species"] = None
-    current = None
-    drop_idx = []
-
-    for idx, row in df.iterrows():
-        cat = _detect_category(row)
-        if cat:
-            if debug:
-                print(f"[DEBUG] Categoría detectada en fila {idx}: {cat}")
-            current = cat
-            drop_idx.append(idx)           # marca para eliminar
-        else:
-            df.at[idx, "species"] = current
-
-    df.drop(index=drop_idx, inplace=True)
-    df.reset_index(drop=True, inplace=True)
-    df["species"].fillna(method="ffill", inplace=True)   # seguridad extra
-    return df
-
-
-# ─────────────────────────────── 6. Otros helpers ─────────────────────────────
-def _to_float(s: str):
-    if pd.isna(s):
-        return None
-    s = str(s).replace(",", "").strip()
-    sign = -1 if s.endswith("-") or (s.startswith("(") and s.endswith(")")) else 1
-    s = s.strip("()- ")
-    try:
-        return float(s) * sign
-    except ValueError:
-        return None
-
-
-def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
-    for col in NUMERIC_COLS:
-        if col in df.columns:
-            df[col] = df[col].apply(_to_float)
-    return df
-
-
-# ─────────────────────────────── 7. Función principal ─────────────────────────
-def read_file(pdf: str | pathlib.Path, debug=False) -> pd.DataFrame:
-    tables = _read_tables(pdf)
-    std = [t for t in (_standardize(x) for x in tables) if t is not None]
-    if not std:
-        return pd.DataFrame()
-
-    df = pd.concat(std, ignore_index=True)
-    df = add_species_column(df, debug=debug)
-
-    # Elimina cabeceras/fragmentos restantes
-    def _is_header(r: pd.Series) -> bool:
-        txt = " ".join(r.astype(str)).upper()
-        return txt.startswith("PRODUCT NUMBER") or txt.startswith("PRICE / UNIT")
-    df = df[~df.apply(_is_header, axis=1)]
-
-    # Metadatos
-    df["plant_location"] = extract_plant_location(pdf)
-    df["date_inserted"] = extract_effective_date(pdf)
-    df["source"] = pathlib.Path(pdf).name
-
-    df = _fix_numeric(df)
-    return df[[*COLUMN_NAMES, "plant_location", "date_inserted", "source", "species"]]
-
-
-# ─────────────────────────────── 8. Bloque main simple ────────────────────────
-if __name__ == "__main__":
-    import argparse
-    import textwrap
-
-    parser = argparse.ArgumentParser(
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description=textwrap.dedent(
-            """
-            Procesa un PDF Purina horizontal y muestra la columna «species».
-            Sin generar archivos, sólo imprime en consola.
-            """
-        ),
-    )
-    parser.add_argument("pdf", help="Ruta al PDF")
-    parser.add_argument("-n", "--rows", type=int, default=30, help="Filas a mostrar")
-    parser.add_argument("--debug", action="store_true", help="Trazas detalladas")
-    args = parser.parse_args()
-
-    path = pathlib.Path(args.pdf)
-    df = read_file(path, debug=args.debug)
-
-    pd.set_option("display.max_columns", None)
-    print("\n— Primeras filas con product_number y species —")
-    print(df[["product_number", "species"]].head(args.rows))
-
-    print("\n— Resumen de categorías —")
-    print(df["species"].value_counts(dropna=False))
-
-    print(f"\n✔ Filas totales: {len(df):,}")
+ValueError: Fecha Effective Date no encontrada.
