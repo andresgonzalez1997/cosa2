@@ -1,1 +1,133 @@
 #-.-.-.-.-.-.-.-.-.-.-.-.-.-.-
+from __future__ import annotations
+import datetime as _dt
+import pathlib
+import re
+from typing import List, Optional, Sequence
+import pandas as pd
+import tabula
+from PyPDF2 import PdfReader
+
+COLUMN_NAMES: List[str] = [
+    "product_number", 
+    "formula_code", 
+    "product_name", 
+    "product_form",
+    "unit_weight", 
+    "pallet_quantity",
+    "stocking_status",
+    "min_order_quantity",
+    "days_lead_time",
+    "fob_or_dlv",
+    "price_change",
+    "list_price",
+    "full_pallet_price",
+    "half_load_full_pallet_price",
+    "full_load_full_pallet_price",
+    "full_load_best_price",
+]
+
+NUMERIC_COLS: List[str] = [
+    "pallet_quantity", "min_order_quantity", "days_lead_time"
+] + COLUMN_NAMES[10:]
+
+_PRICE_RE = re.compile(
+    r"PRICE / UNIT|PRICE IN US DOLLARS?|MIN / DAYS|FORMULA CODE|MONTHLY|PAGE",
+    re.I
+)
+
+SPECIES_SEQUENCE: Sequence[str] = [
+    "AQUACULTURE", "CATTLE - ACCURATION/SPR BLOCKS", "CATTLE - PROTEIN TUBS",
+    "CATTLE - MINERAL TUBS", "CATTLE - WEATHERIZED MINERAL", "CATTLE - STARTERS",
+    "CATTLE - FINISHERS", "CATTLE - RANGE SUPPLEMENTS", "SHEEP", "ALL PURPOSE LIVESTOCK",
+    "DEER/GAME", "FAMILY FLOCK", "FAMILY FLOCK ORGANIC", "GAME BIRD", "GOAT",
+    "GRAINLAND", "HORSE", "TRIPLE CROWN HORSE", "MAZURI BIRD/RATITE",
+    "MAZURI HERBIVORE", "MAZURI KOI / AQUATIC", "MAZURI ALPACA/LLAMA",
+    "MAZURI MINIPIG", "MAZURI OTHER", "MAZURI PRIMATE", "MAZURI RODENT",
+    "MAZURI SMALL PACK", "SPECIALTY MILK REPLACERS", "MILK REPLACER - FULL POTENTIAL",
+    "MILK REPLACER - GROWTH", "CALF CARE SUPPLEMENTS", "PET FOOD - EXCLUSIVE PRODUCTS",
+    "PET FOOD - INFINIA PRODUCTS", "PET FOOD - RED FLANNEL", "PET FOOD - PMI TRADITIONAL",
+    "RABBIT", "PREMIUM SHOW DIETS", "WILD BIRD", "SWINE RETAIL", "PLF CATTLE",
+]
+
+_DATE_PATTERNS = [
+    re.compile(r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*Effective\s+Date", re.I),
+    re.compile(r"Effective\s+Date\s*[-–—]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})", re.I),
+]
+
+def extract_effective_date(pdf_path: str | pathlib.Path) -> _dt.date:
+    reader = PdfReader(str(pdf_path))
+    first_page_text = reader.pages[0].extract_text()
+    for rx in _DATE_PATTERNS:
+        m = rx.search(first_page_text)
+        if m:
+            date_str = m.group(1)
+            sep = "/" if "/" in date_str else "-"
+            mm, dd, yy = date_str.split(sep)
+            yy = "20" + yy if len(yy) == 2 else yy
+            return _dt.datetime.strptime(f"{mm}/{dd}/{yy}", "%m/%d/%Y").date()
+    raise ValueError("No se encontró fecha efectiva")
+
+def extract_plant_location(pdf_path: str | pathlib.Path) -> str:
+    try:
+        tables = tabula.read_pdf(pdf_path, pages=1, area=[0,650,60,1000], lattice=False, guess=False, pandas_options={"header":None, "dtype":str})
+        if tables:
+            text = " ".join(tables[0].fillna("").values.flatten())
+            m = re.search(r"-\s*([A-Za-z &.\-]+?)\s+([A-Za-z]{2})\b", text)
+            return f"{m.group(1).strip().upper()} {m.group(2).upper()}" if m else "PLANTA DESCONOCIDA"
+    except Exception:
+        pass
+    return "PLANTA DESCONOCIDA"
+
+def _to_float(s: str):
+    if pd.isna(s):
+        return None
+    s = str(s).replace(",", "").strip()
+    sign = -1 if s.endswith("-") or (s.startswith("(") and s.endswith(")")) else 1
+    s = s.strip("()- ")
+    try:
+        return float(s) * sign
+    except ValueError:
+        return None
+
+def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    for col in NUMERIC_COLS:
+        if col in df.columns:
+            df[col] = df[col].apply(_to_float)
+    return df
+
+def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
+    if tbl.shape[1] >= 17:
+        numeric_like = tbl.iloc[:,1].astype(str).str[0].str.isdigit().mean() > 0.5
+        tbl = tbl.iloc[:,1:17] if numeric_like else tbl.iloc[:,:16]
+    elif tbl.shape[1] < 16:
+        return None
+    tbl.columns = COLUMN_NAMES
+    return tbl
+
+def _is_header_row(row: pd.Series) -> bool:
+    combined = " ".join(row.astype(str)).upper()
+    return bool(_PRICE_RE.search(combined)) or combined.startswith("PRODUCT FORMULA")
+
+def read_file(pdf: str | pathlib.Path) -> pd.DataFrame:
+    tables = tabula.read_pdf(pdf, pages="all", lattice=True, guess=False, pandas_options={"dtype":str, "header":None})
+    std_tables = [t for t in (_standardize(x) for x in tables) if t is not None]
+    if not std_tables:
+        return pd.DataFrame()
+
+    # Asigna species exactamente en orden a cada tabla
+    data_frames = []
+    for idx, tbl in enumerate(std_tables):
+        tbl = tbl[~tbl.apply(_is_header_row, axis=1)].reset_index(drop=True)
+        tbl.dropna(how='all', inplace=True)
+        tbl["species"] = SPECIES_SEQUENCE[idx] if idx < len(SPECIES_SEQUENCE) else None
+        data_frames.append(tbl)
+
+    df = pd.concat(data_frames, ignore_index=True)
+    
+    df["plant_location"] = extract_plant_location(pdf)
+    df["date_inserted"] = extract_effective_date(pdf)
+    df["source"] = pathlib.Path(pdf).name
+    
+    df = _fix_numeric(df)
+    return df[[*COLUMN_NAMES, "plant_location", "date_inserted", "source", "species"]]
