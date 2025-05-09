@@ -1,23 +1,8 @@
-
-
-
-
-
-"""
-Lectura y limpieza de PDFs.
-
-• Conservar la primera línea real de datos de cada página.
-• Eliminar cabeceras repetidas ("PRODUCT NUMBER …"), fragmentos ("MIN / DAYS")
-  y textos sueltos como "Price / Unit" o "Price in US Dollars".
-• Corrige números negativos (100‑  →  ‑100) y añadir metadatos (fecha, planta, source)
-• Se usa la función pública: df = read_file("pdf_file") la cual devuelve un DataFrame
-  con 19 columnas estándar, listo para cargar.
-"""
 from __future__ import annotations
 import datetime as _dt
 import pathlib
 import re
-from typing import List, Optional
+from typing import List, Optional, Union
 from PyPDF2 import PdfReader
 import pandas as pd
 import tabula
@@ -26,11 +11,11 @@ import tabula
 # 1. Nombres estándar (16 columnas del PDF original)
 # --------------------------------------------------------------------------- #
 COLUMN_NAMES: List[str] = [
-    "product_number", 
-    "formula_code", 
-    "product_name", 
+    "product_number",
+    "formula_code",
+    "product_name",
     "product_form",
-    "unit_weight", 
+    "unit_weight",
     "pallet_quantity",
     "stocking_status",
     "min_order_quantity",
@@ -47,11 +32,9 @@ COLUMN_NAMES: List[str] = [
 # --------------------------------------------------------------------------- #
 # 2. Columnas numéricas que se convertirán a float (Para evitar errores de tipado)
 # --------------------------------------------------------------------------- #
-# «pallet_quantity», «min_order_quantity» y «days_lead_time» salen como int64;
-# se fuerzan a float evitamos el error de esquema Incompatible Parquet/Impala.
 NUMERIC_COLS: List[str] = [
     "pallet_quantity", "min_order_quantity", "days_lead_time",
-] + COLUMN_NAMES[10:]  # todas las columnas de precios
+] + COLUMN_NAMES[10:]
 
 # --------------------------------------------------------------------------- #
 # 3. Lista predefinida de especies en orden de aparición en el PDF
@@ -100,100 +83,59 @@ SPECIES_LIST = [
 ]
 
 # --------------------------------------------------------------------------- #
-# 4. Utilidades Tabula
+# FECHA EFECTIVA
 # --------------------------------------------------------------------------- #
-
-def _first_table(pdf: str | pathlib.Path, area) -> str:
-    try:
-        t = tabula.read_pdf(
-            pdf,
-            pages=1,
-            lattice=True,
-            guess=False,
-            area=area,
-            pandas_options={"header": None, "dtype": str},
-        )[0]
-        return " ".join(t.astype(str).values.ravel())
-    except Exception:
-        return ""
-
-# ------------------------------------------------------------------
-# FECHA EFECTIVA 
-# ------------------------------------------------------------------
 _DATE_PATTERNS = [
     re.compile(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*Effective\s+Date', re.I),
     re.compile(r'Effective\s+Date\s*[-–—]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', re.I),
 ]
 
 def extract_effective_date(pdf_path: str | pathlib.Path) -> _dt.date:
-    """
-    Devuelve la fecha efectiva sin importar si usa '/' o '-' y
-    si el año viene con 2 o 4 dígitos.
-    """
     reader = PdfReader(str(pdf_path))
-    first_page_text = reader.pages[0].extract_text()
+    first_page_text = reader.pages[0].extract_text() or ""
 
-    # Busca la primera coincidencia con cualquiera de los dos patrones
     for rx in _DATE_PATTERNS:
         m = rx.search(first_page_text)
         if m:
-            date_str = m.group(1)            # ej. '01-06-2025' o '01/06/25'
-
-            # Detecta separador               → '/' o '-'
+            date_str = m.group(1)
             sep = "/" if "/" in date_str else "-"
             mm, dd, yy = date_str.split(sep)
-
-            # Normaliza año de 2 dígitos → 4 dígitos (20yy)
             if len(yy) == 2:
                 yy = "20" + yy
-
-            # Arma de nuevo y convierte a date
             return _dt.datetime.strptime(
                 f"{mm}{sep}{dd}{sep}{yy}", f"%m{sep}%d{sep}%Y"
             ).date()
 
-    # Si llega aquí, no encontró la fecha
     raise ValueError("No se encontró la fecha efectiva en el PDF.")
-    
-# -------------------------------------------------------------- #
-#  ▸  EXTRACT_PLANT_LOCATION  – final                            #
-# -------------------------------------------------------------- #
+
+# --------------------------------------------------------------------------- #
+# EXTRACCIÓN DE UBICACIÓN DE PLANTA
+# --------------------------------------------------------------------------- #
 def extract_plant_location(pdf_path: str | pathlib.Path) -> str:
-    """
-    Extrae «PLANTA XX» de la cabecera de un PDF *horizontal*.
-    """
     try:
-        # 1. Leer sólo la franja donde está la línea 1244-STATESVILLE NC WHS
         tables = tabula.read_pdf(
             pdf_path,
             pages=1,
-            area=[0, 650, 60, 1000],          # ← coordenadas embebidas
+            area=[0, 650, 60, 1000],
             lattice=False,
             guess=False,
             pandas_options={"header": None, "dtype": str},
         )
-
         if not tables:
             return "PLANTA DESCONOCIDA"
-
-        # 2. Combinar toda la franja en un único string
         text = " ".join(tables[0].fillna("").values.flatten())
-
-        # 3. Regex: guion + nombre + espacio + dos letras de estado
         m = re.search(r"-\s*([A-Za-z &.\-]+?)\s+([A-Za-z]{2})\b", text)
         if m:
             plant, state = m.groups()
             return f"{plant.strip().upper()} {state.upper()}"
-
         return "PLANTA DESCONOCIDA"
-
     except Exception:
         return "PLANTA DESCONOCIDA"
-    
+
 # --------------------------------------------------------------------------- #
-# 5. Lectura de Tablas con Tabula
+# Lectura de tablas con Tabula
 # --------------------------------------------------------------------------- #
-def _read_tables(pdf):
+def _read_tables(pdf: str) -> list[pd.DataFrame]:
     try:
         return tabula.read_pdf(
             pdf,
@@ -207,27 +149,22 @@ def _read_tables(pdf):
         return []
 
 # --------------------------------------------------------------------------- #
-# 6. Normalización de cada tabla  – versión blindada                          #
+# Normalización de cada tabla
 # --------------------------------------------------------------------------- #
 def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """Recorta a 16 columnas y corrige desplazamientos (17 columnas)."""
-    # Demasiado corta → descartar.
     if tbl.shape[1] < 16:
         return None
-
-    # Caso habitual de desplazamiento: 17 columnas (primera = categoría)
     if tbl.shape[1] >= 17:
         first, second = tbl.iloc[:, 0], tbl.iloc[:, 1]
         numeric_like = second.astype(str).str[0].str.isdigit().mean() > 0.5
         tbl = tbl.iloc[:, 1:17] if numeric_like else tbl.iloc[:, :16]
     else:
         tbl = tbl.iloc[:, :16]
-
     tbl.columns = COLUMN_NAMES
     return tbl
 
 # --------------------------------------------------------------------------- #
-# 7. Conversión numérica (puntual) – evita errores Parquet/Impala
+# Conversión numérica
 # --------------------------------------------------------------------------- #
 def _to_float(s: str):
     if pd.isna(s):
@@ -248,23 +185,23 @@ def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 # --------------------------------------------------------------------------- #
-# 8. Filtro de filas‑cabecera / fragmentos
+# Detección de filas de cabecera/fragmentos
 # --------------------------------------------------------------------------- #
 HEADER_TOKENS = {
-    "PRODUCT", 
-    "FORM", 
-    "UNIT", 
-    "WEIGHT", 
-    "PALLET", 
-    "MIN", 
-    "ORDER",  
-    "QUANTITY", 
-    "DAYS", 
-    "LEAD", 
-    "TIME", 
-    "STOCKING", 
-    "STATUS", 
-    "FOB", 
+    "PRODUCT",
+    "FORM",
+    "UNIT",
+    "WEIGHT",
+    "PALLET",
+    "MIN",
+    "ORDER",
+    "QUANTITY",
+    "DAYS",
+    "LEAD",
+    "TIME",
+    "STOCKING",
+    "STATUS",
+    "FOB",
     "DLV",
 }
 
@@ -272,145 +209,62 @@ PRICE_HEADER_PATTERNS = (
     "PRICE / UNIT",
     "PRICE IN US DOLLAR",
     "PRICE IN US DOLLARS",
-    "MIN / DAYS"
+    "MIN / DAYS",
     "FORMULA CODE",
     "MONTHLY",
-    "PAGE",  # "Page 2 of 13"
+    "PAGE",
 )
-
 _PRICE_RE = re.compile("|".join(re.escape(p) for p in PRICE_HEADER_PATTERNS), re.I)
 
-
 def _is_header_row(row: pd.Series) -> bool:
-    """
-    Determina si una fila es una cabecera técnica (no un encabezado de especie).
-    Las cabeceras técnicas son filas que contienen términos como "PRODUCT NUMBER",
-    "FORMULA CODE", "PRICE IN US DOLLARS", etc.
-    """
     combined = " ".join(row.astype(str)).upper()
-
     if _PRICE_RE.search(combined):
         return True
-
     first = str(row.iloc[0]).strip().upper()
-
-    # Si la primera columna es un número, definitivamente no es cabecera
-    if first and first[0].isdigit():
-        return False
-
-    # Detectar cabeceras técnicas típicas de tablas
     if "FORMULA" in combined and "PRODUCT" in combined:
         return True
-
+    if first and first[0].isdigit():
+        return False
     if first.startswith("PRODUCT") and str(row.iloc[1]).upper().startswith("FORMULA"):
         return True
-
-    if pd.isna(row["list_price"]):
+    if pd.isna(row.get("list_price")):
         if any(tok in combined for tok in HEADER_TOKENS):
             return True
-
-    # Verificar si es un encabezado de especie (que ya manejamos en add_species_column)
-    for species in SPECIES_LIST:
-        if species in combined or species.replace(" - ", "-") in combined:
-            # Esta es una fila de encabezado de especie, pero ya la manejamos en add_species_column
-            # así que no la consideramos como cabecera técnica
-            return False
-
     return False
 
 # --------------------------------------------------------------------------- #
-# 9. Función para identificar encabezados de especies y asignar categorías
-# --------------------------------------------------------------------------- #  
-def add_species_column(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Identifica las filas que son encabezados de especies y asigna la especie
-    correspondiente a las filas siguientes hasta encontrar un nuevo encabezado.
-    
-    Las filas de encabezado generalmente tienen vacía la columna product_number o 
-    tienen un valor que no es numérico, y contienen el nombre de la especie.
-    
-    Args:
-        df: DataFrame con todas las tablas concatenadas
-        
-    Returns:
-        DataFrame con la columna 'species' añadida y las filas de encabezado eliminadas
-    """
-    # Inicializar columna de especies
-    df['species'] = None
-    
-    # Lista para almacenar índices de filas a eliminar (encabezados)
-    header_rows = []
-    
-    # Especie actual
-    current_species = None
-    
-    # Recorrer todas las filas
-    for idx, row in df.iterrows():
-        # Verificar si es una fila de encabezado de especie
-        pn = str(row['product_number']).strip() if pd.notna(row['product_number']) else ""
-        
-        # Consideramos que es encabezado si:
-        # 1. El product_number está vacío, o
-        # 2. El product_number no es numérico
-        is_header = (not pn) or (not pn[0].isdigit() if pn else True)
-        
-        if is_header:
-            # Buscar el nombre de la especie en la fila
-            row_text = " ".join([str(val) for val in row if pd.notna(val) and str(val).strip()])
-            
-            # Intentar encontrar coincidencia con alguna especie de nuestra lista
-            for species in SPECIES_LIST:
-                # Verificar si el nombre de la especie está en el texto de la fila
-                if species in row_text or species.replace(" - ", "-") in row_text:
-                    current_species = species
-                    break
-            
-            # Marcar esta fila para eliminar
-            header_rows.append(idx)
-        else:
-            # Asignar la especie actual a la fila de datos
-            df.at[idx, 'species'] = current_species
-    
-    # Eliminar las filas de encabezado
-    if header_rows:
-        df = df.drop(index=header_rows).reset_index(drop=True)
-    
-    return df
-
+# Función principal con mapeo de species por bloque
 # --------------------------------------------------------------------------- #
-# 10. Función principal
-# --------------------------------------------------------------------------- #
-def read_file(pdf: str | pathlib.Path) -> pd.DataFrame:
-    """
-    Procesa un PDF y devuelve un DataFrame limpio y estandarizado.
-    
-    Args:
-        pdf: Ruta al archivo PDF
-        
-    Returns:
-        DataFrame con todas las tablas concatenadas y con metadatos
-    """
+def read_file(pdf: Union[str, pathlib.Path]) -> pd.DataFrame:
     tables = _read_tables(str(pdf))
-
-    # Normaliza cada tabla y descarta las vacías
-    std_tables = [t for t in (_standardize(x) for x in tables) if t is not None]
+    std_tables = [t for t in (_standardize(tbl) for tbl in tables) if t is not None]
     if not std_tables:
         return pd.DataFrame()
-    
-    # Concatenar todas las tablas primero (incluidos los encabezados de especies)
-    df = pd.concat(std_tables, ignore_index=True)
-    
-    # Identificar y asignar especies, eliminando las filas de encabezado
-    df = add_species_column(df)
-    
-    # Elimina cabeceras/fragmentos técnicos pero conserva las filas de datos
+
+    # Mapea species según índice de la tabla normalizada
+    mapped = []
+    for idx, tbl in enumerate(std_tables):
+        tbl_copy = tbl.copy()
+        up = SPECIES_LIST[idx] if idx < len(SPECIES_LIST) else "DESCONOCIDO"
+        tbl_copy["species"] = up
+        mapped.append(tbl_copy)
+
+    # Concatenar todo
+    df = pd.concat(mapped, ignore_index=True)
+
+    # Limpieza de filas de cabecera/fragmentos
     df = df[~df.apply(_is_header_row, axis=1)].reset_index(drop=True)
     df.dropna(how="all", inplace=True)
 
     # Metadatos
     df["plant_location"] = extract_plant_location(pdf)
-    df["date_inserted"] = extract_effective_date(pdf)
-    df["source"] = pathlib.Path(pdf).name
+    df["date_inserted"]  = extract_effective_date(pdf)
+    df["source"]         = pathlib.Path(pdf).name
 
+    # Conversión numérica
     df = _fix_numeric(df)
-    return df[[*COLUMN_NAMES, "plant_location", "date_inserted", "source", "species"]]
+
+    # Orden final de columnas
+    return df[
+        [*COLUMN_NAMES, "plant_location", "date_inserted", "source", "species"]
+    ]
