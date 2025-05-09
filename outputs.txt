@@ -1,3 +1,8 @@
+
+
+
+
+
 """
 Lectura y limpieza de PDFs.
 
@@ -277,6 +282,11 @@ _PRICE_RE = re.compile("|".join(re.escape(p) for p in PRICE_HEADER_PATTERNS), re
 
 
 def _is_header_row(row: pd.Series) -> bool:
+    """
+    Determina si una fila es una cabecera técnica (no un encabezado de especie).
+    Las cabeceras técnicas son filas que contienen términos como "PRODUCT NUMBER",
+    "FORMULA CODE", "PRICE IN US DOLLARS", etc.
+    """
     combined = " ".join(row.astype(str)).upper()
 
     if _PRICE_RE.search(combined):
@@ -284,11 +294,13 @@ def _is_header_row(row: pd.Series) -> bool:
 
     first = str(row.iloc[0]).strip().upper()
 
-    if "FORMULA" in combined and "PRODUCT" in combined:
-        return True
-
+    # Si la primera columna es un número, definitivamente no es cabecera
     if first and first[0].isdigit():
         return False
+
+    # Detectar cabeceras técnicas típicas de tablas
+    if "FORMULA" in combined and "PRODUCT" in combined:
+        return True
 
     if first.startswith("PRODUCT") and str(row.iloc[1]).upper().startswith("FORMULA"):
         return True
@@ -297,89 +309,71 @@ def _is_header_row(row: pd.Series) -> bool:
         if any(tok in combined for tok in HEADER_TOKENS):
             return True
 
+    # Verificar si es un encabezado de especie (que ya manejamos en add_species_column)
+    for species in SPECIES_LIST:
+        if species in combined or species.replace(" - ", "-") in combined:
+            # Esta es una fila de encabezado de especie, pero ya la manejamos en add_species_column
+            # así que no la consideramos como cabecera técnica
+            return False
+
     return False
 
 # --------------------------------------------------------------------------- #
-# 9. Función para detectar títulos y asignar especies
-# --------------------------------------------------------------------------- #
-def detect_table_headers(pdf_path: str | pathlib.Path) -> List[tuple]:
+# 9. Función para identificar encabezados de especies y asignar categorías
+# --------------------------------------------------------------------------- #  
+def add_species_column(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Detecta los títulos de las tablas y sus posiciones aproximadas en el PDF.
+    Identifica las filas que son encabezados de especies y asigna la especie
+    correspondiente a las filas siguientes hasta encontrar un nuevo encabezado.
+    
+    Las filas de encabezado generalmente tienen vacía la columna product_number o 
+    tienen un valor que no es numérico, y contienen el nombre de la especie.
     
     Args:
-        pdf_path: Ruta al archivo PDF
+        df: DataFrame con todas las tablas concatenadas
         
     Returns:
-        Lista de tuplas (página, posición Y, título) ordenadas por posición
+        DataFrame con la columna 'species' añadida y las filas de encabezado eliminadas
     """
-    # Esta función simula la detección de títulos
-    # En un caso real, se deberían detectar los títulos mediante análisis de texto por posición
-    
-    # Usamos la lista predefinida de especies como títulos
-    # En un PDF real, esta información se extraería directamente
-    return SPECIES_LIST
-    
-def assign_species_to_rows(pdf_path: str | pathlib.Path, tables: List[pd.DataFrame]) -> pd.DataFrame:
-    """
-    Asigna especies a las filas basado en la detección de cambios de tabla.
-    
-    Args:
-        pdf_path: Ruta al archivo PDF
-        tables: Lista de DataFrames ya estandarizados
-        
-    Returns:
-        DataFrame con todas las tablas concatenadas con columna 'species'
-    """
-    # 1. Concatenar todas las tablas primero
-    if not tables:
-        return pd.DataFrame()
-    
-    df = pd.concat(tables, ignore_index=True)
-    
-    # 2. Obtener la lista de especies (títulos) en el orden correcto
-    species_list = detect_table_headers(pdf_path)
-    
-    # 3. Identificar los puntos de quiebre entre tablas
-    # Estos puntos se pueden identificar por cambios en el formato, 
-    # filas vacías o patrones específicos en los datos
-    
-    # Inicializar la columna de especies
+    # Inicializar columna de especies
     df['species'] = None
     
-    # Indicadores de cambio de tabla:
-    # - En este caso, usamos el cambio de patrón en product_number
-    # - También verificamos por filas completamente vacías o con valores NULL
+    # Lista para almacenar índices de filas a eliminar (encabezados)
+    header_rows = []
     
-    # Detectar filas que indican cambio de tabla
-    table_breaks = []
+    # Especie actual
     current_species = None
-    species_index = 0
     
+    # Recorrer todas las filas
     for idx, row in df.iterrows():
-        # Verificar si es una fila de cambio o fila con valores NULL/nan
-        is_null_row = row.isnull().all() or (row.astype(str) == 'NULL').all()
-        pn = str(row["product_number"]).strip() if pd.notna(row["product_number"]) else ""
+        # Verificar si es una fila de encabezado de especie
+        pn = str(row['product_number']).strip() if pd.notna(row['product_number']) else ""
         
-        # Si es cambio de tabla o fila vacía
-        if is_null_row or (pn and not pn[0].isdigit() and pn != ""):
-            # Incrementar al siguiente título si no es solo una fila vacía dentro de la misma tabla
-            if not is_null_row:
-                if species_index < len(species_list) - 1:
-                    species_index += 1
+        # Consideramos que es encabezado si:
+        # 1. El product_number está vacío, o
+        # 2. El product_number no es numérico
+        is_header = (not pn) or (not pn[0].isdigit() if pn else True)
+        
+        if is_header:
+            # Buscar el nombre de la especie en la fila
+            row_text = " ".join([str(val) for val in row if pd.notna(val) and str(val).strip()])
             
-            # No incluir estas filas en el resultado final
-            df.at[idx, 'species'] = None
-            table_breaks.append(idx)
+            # Intentar encontrar coincidencia con alguna especie de nuestra lista
+            for species in SPECIES_LIST:
+                # Verificar si el nombre de la especie está en el texto de la fila
+                if species in row_text or species.replace(" - ", "-") in row_text:
+                    current_species = species
+                    break
+            
+            # Marcar esta fila para eliminar
+            header_rows.append(idx)
         else:
-            # Asignar la especie actual a la fila
-            if species_index < len(species_list):
-                df.at[idx, 'species'] = species_list[species_index]
-            else:
-                # Si hay más tablas que especies, usar la última
-                df.at[idx, 'species'] = species_list[-1]
+            # Asignar la especie actual a la fila de datos
+            df.at[idx, 'species'] = current_species
     
-    # Eliminar filas de quiebre y nulas
-    df = df.drop(index=table_breaks).reset_index(drop=True)
+    # Eliminar las filas de encabezado
+    if header_rows:
+        df = df.drop(index=header_rows).reset_index(drop=True)
     
     return df
 
@@ -403,10 +397,13 @@ def read_file(pdf: str | pathlib.Path) -> pd.DataFrame:
     if not std_tables:
         return pd.DataFrame()
     
-    # Procesar todas las tablas y asignar especies
-    df = assign_species_to_rows(pdf, std_tables)
+    # Concatenar todas las tablas primero (incluidos los encabezados de especies)
+    df = pd.concat(std_tables, ignore_index=True)
     
-    # Elimina cabeceras/fragmentos pero conserva la primera fila de datos real
+    # Identificar y asignar especies, eliminando las filas de encabezado
+    df = add_species_column(df)
+    
+    # Elimina cabeceras/fragmentos técnicos pero conserva las filas de datos
     df = df[~df.apply(_is_header_row, axis=1)].reset_index(drop=True)
     df.dropna(how="all", inplace=True)
 
