@@ -1,270 +1,84 @@
-from __future__ import annotations
-import datetime as _dt
-import pathlib
-import re
-from typing import List, Optional, Union
-from PyPDF2 import PdfReader
-import pandas as pd
-import tabula
+def excecute_process():
+    sp = get_sharepoint_interface("retailpricing")
+    if not sp:
+        print("[ERROR] No se pudo obtener la interfaz de SharePoint.")
+        return
 
-# --------------------------------------------------------------------------- #
-# 1. Nombres estándar (16 columnas del PDF original)
-# --------------------------------------------------------------------------- #
-COLUMN_NAMES: List[str] = [
-    "product_number",
-    "formula_code",
-    "product_name",
-    "product_form",
-    "unit_weight",
-    "pallet_quantity",
-    "stocking_status",
-    "min_order_quantity",
-    "days_lead_time",
-    "fob_or_dlv",
-    "price_change",
-    "list_price",
-    "full_pallet_price",
-    "half_load_full_pallet_price",
-    "full_load_full_pallet_price",
-    "full_load_best_price",
-]
+    files = sp.files_in_folder(REPOSITORY)
+    if not files:
+        print(f"[INFO] No hay archivos en {REPOSITORY}")
+        return
 
-# --------------------------------------------------------------------------- #
-# 2. Columnas numéricas que se convertirán a float (Para evitar errores de tipado)
-# --------------------------------------------------------------------------- #
-NUMERIC_COLS: List[str] = [
-    "pallet_quantity", "min_order_quantity", "days_lead_time",
-] + COLUMN_NAMES[10:]
+    # Filtrar PDFs
+    pdf_files = [f for f in files if f["file_name"].lower().endswith(".pdf")]
+    if not pdf_files:
+        print(f"[INFO] No se encontraron PDFs en {REPOSITORY}")
+        return
 
-# --------------------------------------------------------------------------- #
-# 3. Lista predefinida de especies en orden de aparición en el PDF
-# --------------------------------------------------------------------------- #
-SPECIES_LIST = [
-    "AQUACULTURE",
-    "CATTLE - ACCURATION/SPR BLOCKS",
-    "CATTLE - PROTEIN TUBS",
-    "CATTLE - MINERAL TUBS",
-    "CATTLE - WEATHERIZED MINERAL",
-    "CATTLE - STARTERS",
-    "CATTLE - FINISHERS",
-    "CATTLE - RANGE SUPPLEMENTS",
-    "SHEEP",
-    "ALL PURPOSE LIVESTOCK",
-    "DEER/GAME",
-    "FAMILY FLOCK",
-    "FAMILY FLOCK ORGANIC",
-    "GAME BIRD",
-    "GOAT",
-    "GRAINLAND",
-    "HORSE",
-    "TRIPLE CROWN HORSE",
-    "MAZURI BIRD/RATITE",
-    "MAZURI HERBIVORE",
-    "MAZURI KOI / AQUATIC",
-    "MAZURI ALPACA/LLAMA",
-    "MAZURI MINIPIG",
-    "MAZURI OTHER",
-    "MAZURI PRIMATE",
-    "MAZURI RODENT",
-    "MAZURI SMALL PACK",
-    "SPECIALTY MILK REPLACERS",
-    "MILK REPLACER - FULL POTENTIAL",
-    "MILK REPLACER - GROWTH",
-    "CALF CARE SUPPLEMENTS",
-    "PET FOOD - EXCLUSIVE PRODUCTS",
-    "PET FOOD - INFINIA PRODUCTS",
-    "PET FOOD - RED FLANNEL",
-    "PET FOOD - PMI TRADITIONAL",
-    "RABBIT",
-    "PREMIUM SHOW DIETS",
-    "WILD BIRD",
-    "SWINE RETAIL",
-    "PLF CATTLE",
-]
+    # Conexión a CDP (ambiente de producción en este ejemplo)
+    cdp = CDPInterface(env.production, crd.process_account)
 
-# --------------------------------------------------------------------------- #
-# FECHA EFECTIVA
-# --------------------------------------------------------------------------- #
-_DATE_PATTERNS = [
-    re.compile(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s*Effective\s+Date', re.I),
-    re.compile(r'Effective\s+Date\s*[-–—]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', re.I),
-]
+    total = len(pdf_files)
+    for idx, pdf_info in enumerate(pdf_files, start=1):
+        pdf_filename = pdf_info["file_name"]
+        pdf_sharepoint_path = pdf_info["file_path"]
+        print(f"\n[{idx}/{total}] Procesando: {pdf_filename}")
 
-def extract_effective_date(pdf_path: str | pathlib.Path) -> _dt.date:
-    reader = PdfReader(str(pdf_path))
-    first_page_text = reader.pages[0].extract_text() or ""
+        if not os.path.exists(LOCAL_REPOSITORY):
+            os.makedirs(LOCAL_REPOSITORY, exist_ok=True)
 
-    for rx in _DATE_PATTERNS:
-        m = rx.search(first_page_text)
-        if m:
-            date_str = m.group(1)
-            sep = "/" if "/" in date_str else "-"
-            mm, dd, yy = date_str.split(sep)
-            if len(yy) == 2:
-                yy = "20" + yy
-            return _dt.datetime.strptime(
-                f"{mm}{sep}{dd}{sep}{yy}", f"%m{sep}%d{sep}%Y"
-            ).date()
+        # Descargar PDF
+        local_pdf_path = sp.download_file(pdf_sharepoint_path, LOCAL_REPOSITORY)
+        if not local_pdf_path:
+            print("[ERROR] No se pudo descargar el PDF.")
+            continue
 
-    raise ValueError("No se encontró la fecha efectiva en el PDF.")
+        # Parsear (horizontal)
+        df = pfh.read_file(str(local_pdf_path))
 
-# --------------------------------------------------------------------------- #
-# EXTRACCIÓN DE UBICACIÓN DE PLANTA
-# --------------------------------------------------------------------------- #
-def extract_plant_location(pdf_path: str | pathlib.Path) -> str:
-    try:
-        tables = tabula.read_pdf(
-            pdf_path,
-            pages=1,
-            area=[0, 650, 60, 1000],
-            lattice=False,
-            guess=False,
-            pandas_options={"header": None, "dtype": str},
-        )
-        if not tables:
-            return "PLANTA DESCONOCIDA"
-        text = " ".join(tables[0].fillna("").values.flatten())
-        m = re.search(r"-\s*([A-Za-z &.\-]+?)\s+([A-Za-z]{2})\b", text)
-        if m:
-            plant, state = m.groups()
-            return f"{plant.strip().upper()} {state.upper()}"
-        return "PLANTA DESCONOCIDA"
-    except Exception:
-        return "PLANTA DESCONOCIDA"
+        # Observa columnas
+        print("[DEBUG] Columnas del DF tras parsear:\n", df.columns.tolist())
+        if "ref_col" in df.columns:
+            print("[WARN] Se detectó ref_col en el DF... se eliminará.")
+            df = df.drop(columns=["ref_col"], errors="ignore")
 
-# --------------------------------------------------------------------------- #
-# Lectura de tablas con Tabula
-# --------------------------------------------------------------------------- #
-def _read_tables(pdf: str) -> list[pd.DataFrame]:
-    try:
-        return tabula.read_pdf(
-            pdf,
-            pages="all",
-            lattice=True,
-            guess=False,
-            pandas_options={"dtype": str, "header": None},
-        )
-    except Exception as exc:
-        print("[tabula]", exc)
-        return []
+        print(df.head(5))
 
-# --------------------------------------------------------------------------- #
-# Normalización de cada tabla
-# --------------------------------------------------------------------------- #
-def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
-    if tbl.shape[1] < 16:
-        return None
-    if tbl.shape[1] >= 17:
-        first, second = tbl.iloc[:, 0], tbl.iloc[:, 1]
-        numeric_like = second.astype(str).str[0].str.isdigit().mean() > 0.5
-        tbl = tbl.iloc[:, 1:17] if numeric_like else tbl.iloc[:, :16]
-    else:
-        tbl = tbl.iloc[:, :16]
-    tbl.columns = COLUMN_NAMES
-    return tbl
+        # Forzar tipos
+        df = set_column_types(df)
+        print("[DEBUG] Columnas tras set_column_types:\n", df.columns.tolist())
 
-# --------------------------------------------------------------------------- #
-# Conversión numérica
-# --------------------------------------------------------------------------- #
-def _to_float(s: str):
-    if pd.isna(s):
-        return None
-    s = str(s).replace(",", "").strip()
-    sign = -1 if s.endswith("-") or (s.startswith("(") and s.endswith(")")) else 1
-    s = s.strip("()- ")
-    try:
-        return float(s) * sign
-    except ValueError:
-        return None
+        # Revisar shape
+        print("[INFO] DataFrame shape:", df.shape)
+        print(df.head(10))
 
+        if df.shape[0] > 0:
+            # Nombre base sin extensión
+            raw_name = pathlib.Path(pdf_filename).stem
+            # Aplica la lógica de limpieza
+            base_name = correct_file_name(raw_name)
+            print("[DEBUG] Nombre base para la tabla temporal:", base_name)
 
-def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
-    for col in NUMERIC_COLS:
-        if col in df.columns:
-            df[col] = df[col].apply(_to_float)
-    return df
+            # Subir a la tabla final
+            if cdp.upload_data(df, "comp_price_horizontal_files", base_name):
+                print(f"[INFO] '{pdf_filename}' subido correctamente a 'comp_price_horizontal_files'.")
+            else:
+                print("[ERROR] Falló la subida a CDP.")
+        else:
+            print("[INFO] DF vacío, no se suben datos.")
 
-# --------------------------------------------------------------------------- #
-# Detección de filas de cabecera/fragmentos
-# --------------------------------------------------------------------------- #
-HEADER_TOKENS = {
-    "PRODUCT",
-    "FORM",
-    "UNIT",
-    "WEIGHT",
-    "PALLET",
-    "MIN",
-    "ORDER",
-    "QUANTITY",
-    "DAYS",
-    "LEAD",
-    "TIME",
-    "STOCKING",
-    "STATUS",
-    "FOB",
-    "DLV",
-}
+        # Eliminar de SharePoint (descomentar si ya confirmaste la subida):
+        
+        try:
+            if sp.delete_file(pdf_sharepoint_path):
+                print(f"[INFO] Archivo '{pdf_filename}' eliminado de SharePoint.")
+            else:
+                print(f"[WARN] No se pudo eliminar '{pdf_filename}' de SharePoint.")
+        except Exception as e:
+            print(f"[ERROR] Al intentar eliminar en SharePoint: {e}")
+        
 
-PRICE_HEADER_PATTERNS = (
-    "PRICE / UNIT",
-    "PRICE IN US DOLLAR",
-    "PRICE IN US DOLLARS",
-    "MIN / DAYS",
-    "FORMULA CODE",
-    "MONTHLY",
-    "PAGE",
-)
-_PRICE_RE = re.compile("|".join(re.escape(p) for p in PRICE_HEADER_PATTERNS), re.I)
+    print("\n[INFO] Proceso completado para todos los PDFs.")
 
-def _is_header_row(row: pd.Series) -> bool:
-    combined = " ".join(row.astype(str)).upper()
-    if _PRICE_RE.search(combined):
-        return True
-    first = str(row.iloc[0]).strip().upper()
-    if "FORMULA" in combined and "PRODUCT" in combined:
-        return True
-    if first and first[0].isdigit():
-        return False
-    if first.startswith("PRODUCT") and str(row.iloc[1]).upper().startswith("FORMULA"):
-        return True
-    if pd.isna(row.get("list_price")):
-        if any(tok in combined for tok in HEADER_TOKENS):
-            return True
-    return False
-
-# --------------------------------------------------------------------------- #
-# Función principal con mapeo de species por bloque
-# --------------------------------------------------------------------------- #
-def read_file(pdf: Union[str, pathlib.Path]) -> pd.DataFrame:
-    tables = _read_tables(str(pdf))
-    std_tables = [t for t in (_standardize(tbl) for tbl in tables) if t is not None]
-    if not std_tables:
-        return pd.DataFrame()
-
-    # Mapea species según índice de la tabla normalizada
-    mapped = []
-    for idx, tbl in enumerate(std_tables):
-        tbl_copy = tbl.copy()
-        up = SPECIES_LIST[idx] if idx < len(SPECIES_LIST) else "DESCONOCIDO"
-        tbl_copy["species"] = up
-        mapped.append(tbl_copy)
-
-    # Concatenar todo
-    df = pd.concat(mapped, ignore_index=True)
-
-    # Limpieza de filas de cabecera/fragmentos
-    df = df[~df.apply(_is_header_row, axis=1)].reset_index(drop=True)
-    df.dropna(how="all", inplace=True)
-
-    # Metadatos
-    df["plant_location"] = extract_plant_location(pdf)
-    df["date_inserted"]  = extract_effective_date(pdf)
-    df["source"]         = pathlib.Path(pdf).name
-
-    # Conversión numérica
-    df = _fix_numeric(df)
-
-    # Orden final de columnas
-    return df[
-        [*COLUMN_NAMES, "plant_location", "date_inserted", "source", "species"]
-    ]
+if __name__ == "__main__":
+    excecute_process()
