@@ -1,12 +1,12 @@
 Rank_mm_antes_50pct :=
-VAR _threshold   = 0.5               -- 50 %
-VAR _lastRank <
+VAR _threshold = 0.5   -- 50 %
+VAR _lastRank =
     CALCULATE (
-        MAX ( 'Mrg_by_SKU'[Rank_mm] ),     -- ① el Rank_mm más alto…
-        FILTER (
-            ALLSELECTED ( 'Mrg_by_SKU' ),  -- ② …dentro de los filtros vigentes
-            'Mrg_by_SKU'[% Accumulated] < _threshold
+        MAX ( 'Mrg_by_SKU'[Rank_mm] ),          -- ① toma el RANK más alto
+        FILTER (                                -- ② entre las filas…
+            ALLSELECTED ( 'Mrg_by_SKU' ),       --    visibles tras tus slicers
+            'Mrg_by_SKU'[% Accumulated] < _threshold   --    pero < 50 %
         )
     )
 RETURN
-    _lastRank    -- (si no hay filas < 50 %, devuelve BLANK)
+    _lastRank   -- si no hay filas < 50 %, devuelve BLANK()
