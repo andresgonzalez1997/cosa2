@@ -1,41 +1,64 @@
-Objetivo 1--------------------
-Context:
-During FY25 I focused on designing, delivering, and refining data solutions for the CQN Ecuador and MX Pricing portfolios. As a separate, Ecuador-linked project, I also developed a comprehensive sensitivity analysis. The challenge was to deliver both planned dashboards and one-off requests within agreed timelines, validate every requirement with absolute clarity, realistically estimate and plan all tasks, and apply thorough exploratory analysis to each dataset.
 
-Action:
-Weekly direct meetings were established with the primary stakeholder to capture and prioritize requirements in real time. We maintained a single, shared Excel workbook where every request was logged with its submission date, owner, and status. In each session, we reviewed progress, revisited and adjusted time estimates according to complexity, and re-ranked priorities as workload demands shifted. On top of these touchpoints, we held targeted work-session calls to address the most urgent needs immediately, ensuring an agile, transparent communication channel throughout the project.
+Max_Min_Median_UnitNetPrice =
+VAR Base /*  ▶️  Datos de origen  */
+    = 'DataBase_SalesData'
 
-Resolution:
-Thanks to this disciplined approach, we delivered all dashboards and one-off requests on schedule and without any need for rework, guaranteeing that every output exactly matched stakeholder expectations. The sensitivity analysis for Ecuador was completed successfully, yielding key strategic insights. Stakeholders praised the process for its transparency, flexibility, and speed, and the team has since adopted this collaboration model as a best practice—enhancing their organizational rigor, continuous learning, and overall commitment.
+    /*  ──────────────────────────────────────────────────────────────
+       Si querés excluir o incluir un Material_Category específico
+       (por ej. "Pet Food"), podrías filtrar aquí:
 
-Objetivo 2--------------------
-Context:
-I was appointed as the corporate responsibility lead for the Analytics Hub team, tasked with driving at least two volunteer initiatives and putting in place a clear process for tracking the team’s social engagement hours.
+       = FILTER ( 'DataBase_SalesData',
+                  'DataBase_SalesData'[Material_Category] <> "Pet Food" )
+       ────────────────────────────────────────────────────────────── */
+VAR Unpivot /*  ▶️  Convierte las dos columnas en filas  */
+    =
+    UNION (
+        /* ▒▒▒  TM FACTURADO  ▒▒▒ */
+        SELECTCOLUMNS (
+            Base,
+            "XIPRDS"   , Base[XIPRDS],
+            "XIQTSA"   , Base[XIQTSA],
+            "Cst_FIFO" , Base[Cst_FIFO],
+            "Cst_Mkt"  , Base[Cst_Mkt],
+            "TT Disc"  , Base[TT Disc],
+            /*  Nuevo atributo para el slicer  */
+            "Tipo"     , "TM Facturado",
+            /*  Valor monetario que necesitás analizar  */
+            "Valor"    , Base[TM Facturado],
+            /*  Ventas reales (antes las calculabas como
+                ROUND(SUM(TT Amnt)) dentro de SUMMARIZE)  */
+            "TT_Amnt"  , Base[TT Amnt]
+        ),
 
-Action:
-I met with the CSR coordinator to gain a deep understanding of the existing workflow and agree on an accurate method for recording hours. I proposed and led two flagship activities: a visit to the Food Bank—handling logistics, transportation, and team refreshments—and an internal recycling program, for which I designed and distributed registration forms. At the same time, I created a shared spreadsheet to log each teammate’s contributed hours, kept everyone informed by presenting upcoming activities, answered questions in real time, and actively encouraged full participation.
+        /* ▒▒▒  TM EMBARCADO  ▒▒▒ */
+        SELECTCOLUMNS (
+            Base,
+            "XIPRDS"   , Base[XIPRDS],
+            "XIQTSA"   , Base[XIQTSA],
+            "Cst_FIFO" , Base[Cst_FIFO],
+            "Cst_Mkt"  , Base[Cst_Mkt],
+            "TT Disc"  , Base[TT Disc],
+            "Tipo"     , "TM Embarcado",
+            "Valor"    , Base[TM Embarcado],
+            "TT_Amnt"  , Base[TT Amnt]
+        )
+    )
 
-Resolution:
-As a result of this approach, both initiatives were executed smoothly and every hour of volunteer work was meticulously recorded. The CSR coordinator praised the transparency and efficiency of the process, and our team emerged with a stronger sense of social commitment and ownership. These achievements highlight my proactive leadership, my ability to align the team behind high-impact goals, and my dedication to generating value beyond our core analytics responsibilities.
+RETURN
+    /* ▶️  Agregamos (como hacías con SUMMARIZE)           */
+    /*     y redondeamos los totales donde hacía falta     */
+    SUMMARIZE (
+        Unpivot,
 
-Objetivo 3--------------------
-Context:
-At the start of H2 FY25 I was charged with delivering Oozie process-scheduling training to our global Analytics Hub team, ensuring every member could confidently manage scheduled workflows by year-end.
+        /*  ➤  Claves / columnas que querés mantener  */
+        [XIPRDS],
+        [XIQTSA],
+        [Cst_FIFO],
+        [Cst_Mkt],
+        [TT Disc],
+        [Tipo],          /*  ahora es tu “Volume Type” verdadero  */
 
-Action:
-I began by providing one-on-one support to a Sustainability colleague, then expanded into structured sessions covering essential Oozie scheduling principles. I demonstrated how to author and deploy shell scripts from our edge node—using WinSCP for secure file transfer and PuTTY for command-line access—and walked the team step-by-step through creating Kerberos tokens for authentication and moving those scripts into HDFS. Finally, I led an in-person workshop for the entire analytics group, tying all these elements together with real-world examples and hands-on practice.
-
-Resolution:
-All planned sessions were delivered on schedule and fully attended. Attendees reported feeling empowered to configure and manage their own workflows, and they’ve already applied these practices across multiple projects. This success highlights my commitment to team development, my skill in making complex tools accessible, and my dedication to driving best-practice adoption.
-
-Objetivo 4--------------------
-Context:
-In the second half of FY25 I led three strategic Analytics Hub initiatives across the Americas: a North America–focused Python project to ingest competitive pricing data from horizontally formatted PDF catalogs; a comprehensive sensitivity analysis for the Ecuador business; and ongoing support of a Central Latam SKU profitability dashboard in Power BI. Each effort was designed to meet distinct regional requirements while demonstrating scalable, repeatable processes.
-
-Action:
-I architected a bespoke Python pipeline that parses complex, multi-page PDF layouts—using coordinate-based extraction logic to align repeated headers, normalize tables, and handle varying formats—so that raw competitive data could flow seamlessly into our analytics platform. In parallel, I conducted the Ecuador sensitivity analysis: gathering scenario parameters directly with stakeholders, building financial models, and translating results into clear visual summaries. For the Central Latam SKU profitability project, I defined and implemented end-to-end data transformation workflows in Power BI—mapping business requirements to dynamic measures, creating ETL scripts to cleanse and aggregate transaction data, and assembling interactive dashboards that surface margin drivers. Throughout, I maintained close collaboration with regional teams, solicited real-time feedback, and iterated rapidly to ensure every deliverable aligned precisely with client needs.
-
-Resolution:
-The North America ingestion pipeline now runs autonomously, eliminating manual data entry and accelerating turnaround from days to hours. The Ecuador sensitivity analysis provided actionable insights that directly informed pricing strategies and was lauded by leadership for its clarity and rigor. The Central Latam SKU profitability dashboard went live on schedule, empowering stakeholders with interactive margin analysis and enabling smarter product-mix decisions. Collectively, these successes showcase my technical mastery, stakeholder engagement, and unwavering commitment to delivering high-impact, regionally tailored analytics solutions.
-
-Objetivo 5--------------------
+        /*  ➤  Métricas calculadas  */
+        "Actual Sales", ROUND ( SUM ( Unpivot[TT_Amnt] ), 0 ),
+        "Unit Net"    , ROUND ( SUM ( Unpivot[Valor]  ), 0 )
+    )
