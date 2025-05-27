@@ -1,21 +1,8 @@
-M_Max Price :=
-VAR vType = SELECTEDVALUE ( Table_VolumeType[Volume Type] )
-RETURN
-    SWITCH (
-        vType,                                        -- ¿qué hay seleccionado?
-        "TM Facturado",
-            MAXX (
-                DataBase_SalesData,
-                DIVIDE ( DataBase_SalesData[XIEPRF],
-                        DataBase_SalesData[XIQTSA],   -- vol. facturado
-                        BLANK ( ) )                   -- evita errores 0/0
-            ),
-        "TM Embarcado",
-            MAXX (
-                DataBase_SalesData,
-                DIVIDE ( DataBase_SalesData[XIEPRF],
-                        DataBase_SalesData[XIWEXT],   -- vol. embarcado
-                        BLANK ( ) )
-            ),
-        BLANK ()                                      -- nada o varios valores seleccionados
+% Param MM Acumulado :=
+VAR _totalFinal =
+    CALCULATE (                         -- quita filtros de fila, pero
+        MAX ( [Parameter MM Accumulated] ), -- ① toma el mayor acumulado (el último)
+        ALLSELECTED ( 'DataBase_SalesData' ) -- ② respeta slicers y filtros externos
     )
+RETURN
+    DIVIDE ( [Parameter MM Accumulated], _totalFinal )
