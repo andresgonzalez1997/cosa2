@@ -1,8 +1,15 @@
-% Param MM Acumulado :=
-VAR _totalFinal =
-    CALCULATE (                         -- quita filtros de fila, pero
-        MAX ( [Parameter MM Accumulated] ), -- ① toma el mayor acumulado (el último)
-        ALLSELECTED ( 'DataBase_SalesData' ) -- ② respeta slicers y filtros externos
+Rank_mm_antes_50pct :=
+VAR _tablaFiltrada =
+    FILTER (
+        ALLSELECTED ( 'Mrg_by_SKU' ),          -- respeta slicers y filtros externos
+        'Mrg_by_SKU'[% Accumulated] < 0.5      -- solo las filas por debajo de 50 %
     )
+
 RETURN
-    DIVIDE ( [Parameter MM Accumulated], _totalFinal )
+    MAXX (                                     -- toma la fila más cercana al 50 %
+        TOPN (                                 -- …la 1.ª fila de…
+            1, _tablaFiltrada,
+            'Mrg_by_SKU'[% Accumulated], DESC  -- …la más alta < 50 %
+        ),
+        'Mrg_by_SKU'[Rank_mm]                  -- y devuelve su Rank_mm
+    )
