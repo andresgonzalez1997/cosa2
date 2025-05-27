@@ -1,5 +1,21 @@
-Unt Net Prx CM (Embarcado always) :=
-CALCULATE (
-    [Unt Net Prx CM],
-    Table_VolumeType[Volume Type] = "TM Embarcado"
-)
+M_Max Price :=
+VAR vType = SELECTEDVALUE ( Table_VolumeType[Volume Type] )
+RETURN
+    SWITCH (
+        vType,                                        -- ¿qué hay seleccionado?
+        "TM Facturado",
+            MAXX (
+                DataBase_SalesData,
+                DIVIDE ( DataBase_SalesData[XIEPRF],
+                        DataBase_SalesData[XIQTSA],   -- vol. facturado
+                        BLANK ( ) )                   -- evita errores 0/0
+            ),
+        "TM Embarcado",
+            MAXX (
+                DataBase_SalesData,
+                DIVIDE ( DataBase_SalesData[XIEPRF],
+                        DataBase_SalesData[XIWEXT],   -- vol. embarcado
+                        BLANK ( ) )
+            ),
+        BLANK ()                                      -- nada o varios valores seleccionados
+    )
