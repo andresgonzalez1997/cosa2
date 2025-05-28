@@ -1,11 +1,29 @@
-Max Price =
-CALCULATE(
-    MAXX(
-        ADDCOLUMNS(
-            VALUES('DataBase_SalesData'[Invoice Date]),
-            "NetPrice", [Unt Net Prx CM]
-        ),
-        [NetPrice]
-    ),
-    ALLEXCEPT('DataBase_SalesData', 'DataBase_SalesData'[XIPRDS])
+-- 1) Volumen total del SKU
+Vol_Total :=
+CALCULATE (
+    SUM ( DataBase_SalesData[Volume] ),
+    ALLEXCEPT ( DataBase_SalesData, DataBase_SalesData[XIPRDS] )
 )
+
+-- 2) Ventas totales del SKU
+Sales_Total :=
+CALCULATE (
+    SUM ( DataBase_SalesData[Sales] ),
+    ALLEXCEPT ( DataBase_SalesData, DataBase_SalesData[XIPRDS] )
+)
+
+-- 3) Precio medio del SKU  (= ventas / volumen)
+Avg_Price :=
+DIVIDE ( [Sales_Total], [Vol_Total] )
+
+-- 4) Precio máx. histórico del SKU (usa tu medida Unt Net Prx CM)
+Max_UnitNetPrice :=
+VAR _SKU = SELECTEDVALUE ( DataBase_SalesData[XIPRDS] )
+RETURN
+    MAXX (
+        FILTER (
+            ALL ( DataBase_SalesData ),              -- ignora filtros
+            DataBase_SalesData[XIPRDS] = _SKU        -- …pero sólo de este SKU
+        ),
+        [Unt Net Prx CM]                            -- vuelve a evaluar la medida
+    )
