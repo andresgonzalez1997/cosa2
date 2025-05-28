@@ -1,10 +1,16 @@
-Rank_antes_50pct :=
-CALCULATE (
-    MAX ( 'Mrg_by_SKU'[Rank_mm] ),                   -- columna Rank_mm
-    KEEPFILTERS (
-        FILTER (
-            ALLSELECTED ( 'Mrg_by_SKU' ),
-            [% Accumulated Parameter MM] < 0.5
-        )
+
+50 % Rank_mm :=
+VAR _target   = 0.5                       -- 50 %
+VAR _rowsBelowTarget =
+    FILTER (
+        ALL ( 'Mrg_by_SKU' ),             -- ignora filtros de fila
+        'Mrg_by_SKU'[% Accumulated Parameter MM] < _target
     )
-)
+VAR _closestToTarget =
+    TOPN (                                 -- deja 1 sola fila…
+        1,                                 -- …la más cercana al 50 %
+        _rowsBelowTarget,
+        'Mrg_by_SKU'[% Accumulated Parameter MM], DESC
+    )
+RETURN
+    MAXX ( _closestToTarget, 'Mrg_by_SKU'[Rank_mm] )
