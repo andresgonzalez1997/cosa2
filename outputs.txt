@@ -1,16 +1,11 @@
-50%_parameter_mm :=
-VAR _target = 0.5                                    -- 50 %
-VAR _skuScope =
-    ALLSELECTED ( DataBase_SalesData[XIPRDS] )       -- respeta todos los filtros externos
-VAR _evaluated =
-    ADDCOLUMNS (                                     -- calcula por SKU:
-        _skuScope,
-        "@Accum", [% Acumulated Parameter MM],       -- 1) % acumulado
-        "@Rank" , [Rank_mm]                          -- 2) rango
-    )
-VAR _belowTarget =
-    FILTER ( _evaluated, [@Accum] < _target )        -- solo los que aún no llegan a 50 %
-VAR _closest =
-    TOPN ( 1, _belowTarget, [@Accum], DESC )         -- el + cercano al 50 %
-RETURN
-    MAXX ( _closest, [@Rank] )                       -- devuelve su Rank_mm
+Max Price =
+CALCULATE(
+    MAXX(
+        ADDCOLUMNS(
+            VALUES('DataBase_SalesData'[Invoice Date]),
+            "NetPrice", [Unt Net Prx CM]
+        ),
+        [NetPrice]
+    ),
+    ALLEXCEPT('DataBase_SalesData', 'DataBase_SalesData'[XIPRDS])
+)
