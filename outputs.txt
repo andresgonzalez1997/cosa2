@@ -1,29 +1,40 @@
--- 1) Volumen total del SKU
-Vol_Total :=
-CALCULATE (
-    SUM ( DataBase_SalesData[Volume] ),
-    ALLEXCEPT ( DataBase_SalesData, DataBase_SalesData[XIPRDS] )
-)
-
--- 2) Ventas totales del SKU
-Sales_Total :=
-CALCULATE (
-    SUM ( DataBase_SalesData[Sales] ),
-    ALLEXCEPT ( DataBase_SalesData, DataBase_SalesData[XIPRDS] )
-)
-
--- 3) Precio medio del SKU  (= ventas / volumen)
-Avg_Price :=
-DIVIDE ( [Sales_Total], [Vol_Total] )
-
--- 4) Precio máx. histórico del SKU (usa tu medida Unt Net Prx CM)
-Max_UnitNetPrice :=
-VAR _SKU = SELECTEDVALUE ( DataBase_SalesData[XIPRDS] )
-RETURN
-    MAXX (
-        FILTER (
-            ALL ( DataBase_SalesData ),              -- ignora filtros
-            DataBase_SalesData[XIPRDS] = _SKU        -- …pero sólo de este SKU
-        ),
-        [Unt Net Prx CM]                            -- vuelve a evaluar la medida
-    )
+let
+    Source = Table.Combine({CUBOVEN, CUBO_HIST}),
+    #"Split Column by Delimiter" = Table.SplitColumn(Source, "FECHA", Splitter.SplitTextByDelimiter("/", QuoteStyle.Csv), {"FECHA.1", "FECHA.2","FECHA.3"}),
+    #"Added Custom" = Table.AddColumn(#"Split Column by Delimiter", "Fecha", each [FECHA.2]&"/"&[FECHA.1]&"/"&"20"&[FECHA.3]),
+    #"Removed Columns" = Table.RemoveColumns(#"Added Custom",{"FECHA.1", "FECHA.2", "FECHA.3", "Date/Time"}),
+    #"Split Column by Positions" = Table.SplitColumn(#"Removed Columns", "OHASDT", Splitter.SplitTextByPositions({1}), {"OHASDT.1"}),
+    #"Split Column by Position" = Table.SplitColumn(#"Split Column by Positions", "OHASDT.1", Splitter.SplitTextByRepeatedLengths(2), {"OHASDT.1.1", "OHASDT.1.2","OHASDT.1.3"}),
+    #"Added Custom1" = Table.AddColumn(#"Split Column by Position", "OHASDT", each [OHASDT.1.3]&"/"&[OHASDT.1.2]&"/"&"20"&[OHASDT.1.1]),
+    #"Removed Columns1" = Table.RemoveColumns(#"Added Custom1",{"OHASDT.1.1", "OHASDT.1.2", "OHASDT.1.3"}),
+    #"Added Custom2" = Table.AddColumn(#"Removed Columns1", "Invoice Date", each if [OHASDT] = null then [Fecha] else [OHASDT]),
+    #"Removed Columns2" = Table.RemoveColumns(#"Added Custom2",{"Fecha", "OHASDT"}),
+    #"Changed Type" = Table.TransformColumnTypes(#"Removed Columns2",{{"Invoice Date", type date}}),
+    #"Added Custom3" = Table.AddColumn(#"Changed Type", "Id_SLoc", each [PAIS]&"_"&Number.ToText([XCDIST])&"_"&[XILOC2]),
+    #"Changed Type1" = Table.TransformColumnTypes(#"Added Custom3",{{"Id_SLoc", type text}}),
+    #"Added Custom4" = Table.AddColumn(#"Changed Type1", "Id_CusBill", each [Id_SLoc]&"_"&Number.ToText([XHCSNO])),
+    #"Changed Type2" = Table.TransformColumnTypes(#"Added Custom4",{{"Id_CusBill", type text}}),
+    #"Added Custom5" = Table.AddColumn(#"Changed Type2", "Id_Distr", each [PAIS]&"_"&Number.ToText([XCDIST])),
+    #"Changed Type3" = Table.TransformColumnTypes(#"Added Custom5",{{"Id_Distr", type text}}),
+    #"Added Custom6" = Table.AddColumn(#"Changed Type3", "Id_CusAcnt", each [Id_Distr]&"_"&Number.ToText([XHCSNO])),
+    #"Changed Type4" = Table.TransformColumnTypes(#"Added Custom6",{{"Id_CusAcnt", type text}}),
+    #"Added Custom7" = Table.AddColumn(#"Changed Type4", "Id_Mat", each Number.ToText([XIPRDC])&"_"&Text.Trim([XIPRSC])&"_"&Text.Trim ([XIFRMC])&"_"&Text.Trim ([XICONT])),
+    #"Added Custom8" = Table.AddColumn(#"Added Custom7", "Id_SKU", each [Id_SLoc]&"_"&[Id_Mat]),
+    #"Added Custom9" = Table.AddColumn(#"Added Custom8", "Id_Brand", each [Id_Distr]&"_"& (if [BMBRND] = "6" then "3" else [BMBRND])),
+    #"Added Custom10" = Table.AddColumn(#"Added Custom9", "Id_SubBrand", each [Id_Distr]&"_"&[SBSBRD]),
+    #"Added Custom11" = Table.AddColumn(#"Added Custom10", "Id_E2E", each Number.ToText(Date.Year([Invoice Date]))&Number.ToText(Date.Month([Invoice Date]))&"_"&[Id_Mat]),
+    #"Replaced Value" = Table.ReplaceValue(#"Added Custom11","TECNOTEMPE S.A.","TECNOTEMPE SA",Replacer.ReplaceText,{"CMCSNM"}),
+    #"Replaced Value1" = Table.ReplaceValue(#"Replaced Value","BIOSUPER SA","BIOSUPER S.A.S.",Replacer.ReplaceText,{"CMCSNM"}),
+    #"Replaced Value2" = Table.ReplaceValue(#"Replaced Value1","PIGALLE SA","PIGALLE S.A.S.",Replacer.ReplaceText,{"CMCSNM"}),
+    #"Replaced Value3" = Table.ReplaceValue(#"Replaced Value2","AGROINDUSTRIAS DAJAHU S.A.","CORPORACION JAVE S.A.",Replacer.ReplaceText,{"CMCSNM"}),
+    #"Replaced Value4" = Table.ReplaceValue(#"Replaced Value3","JESUS DEL GRAN PODER, J.D.G.P. S.A.","JESUS DEL GRAN PODER, J.D.G.P. S.A., J.D.G.P. S.A.",Replacer.ReplaceText,{"CMCSNM"}),
+    #"Replaced Value5" = Table.ReplaceValue(#"Replaced Value4","JESUS DEL GRAN PODER, J.D.G.P. S.A., J.D.G.P. S.A., J.D.G.P. S.A.","JESUS DEL GRAN PODER, J.D.G.P. S.A., J.D.G.P. S.A.",Replacer.ReplaceText,{"CMCSNM"}),
+    #"Replaced Value6" = Table.ReplaceValue(#"Replaced Value5","SUPER FARMACIAS SIMAN, S.A.","SUPER FARMACIA SIMAN, S.A.",Replacer.ReplaceText,{"CMCSNM"}),
+    #"Replaced Value7" = Table.ReplaceValue(#"Replaced Value6","ROGER ELIAN ESPINAL ALVARADO","GRANJA AVICOLA ESPINAL",Replacer.ReplaceText,{"CMCSNM"}),
+    #"Replaced Value8" = Table.ReplaceValue(#"Replaced Value7","GLOBE BUSSINES CREA E.I.R.L.","GLOBE BUSSINES CREA SOCIEDAD ANONIMA",Replacer.ReplaceText,{"CMCSNM"}),
+    #"Replaced Value9" = Table.ReplaceValue(#"Replaced Value8","DISTRIBUIRORES MULTIPLES F&E SAC","DISTRIBUIDORES MULTIPLES F&E S.A.C.",Replacer.ReplaceText,{"CMCSNM"}),
+    #"Added Custom12" = Table.AddColumn(#"Replaced Value9", "XIONUM&IDCUSBILL", each Number.ToText([XIONUM])&"_"&[Id_CusBill]),
+    #"Filtered Rows" = Table.SelectRows(#"Added Custom12", each [#"XIONUM&IDCUSBILL"] <> "39445_051_111_70_888" and [#"XIONUM&IDCUSBILL"] <> "61832_051_111_10_26" and [#"XIONUM&IDCUSBILL"] <> "61641_051_111_10_26" and [#"XIONUM&IDCUSBILL"] <> "61640_051_111_10_26" and [#"XIONUM&IDCUSBILL"] <> "32142_051_111_74_26"),
+    #"Renamed Columns" = Table.RenameColumns(#"Filtered Rows",{{"Material Category", "Material_Category"}})
+in
+    #"Renamed Columns"
