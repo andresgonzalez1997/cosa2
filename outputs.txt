@@ -1,93 +1,108 @@
 let
-    /*----------------------------------------------------------
-     * 1. Origen y transformaciones tal como las tenías
-     *---------------------------------------------------------*/
-    Source = Table.Combine({CUBOVEN, CUBO_HIST}),
-    #"Split Column by Delimiter" = Table.SplitColumn(Source, "FECHA", Splitter.SplitTextByDelimiter("/", QuoteStyle.Csv), {"FECHA.1", "FECHA.2", "FECHA.3"}),
-    #"Added Custom" = Table.AddColumn(#"Split Column by Delimiter", "Fecha", each [FECHA.2] & "/" & [FECHA.1] & "/" & "20" & [FECHA.3]),
-    #"Removed Columns" = Table.RemoveColumns(#"Added Custom",{"FECHA.1", "FECHA.2", "FECHA.3", "Date/Time"}),
-    #"Split Column by Positions" = Table.SplitColumn(#"Removed Columns", "OHASDT", Splitter.SplitTextByPositions({1}), {"OHASDT.1"}),
-    #"Split Column by Position" = Table.SplitColumn(#"Split Column by Positions", "OHASDT.1", Splitter.SplitTextByRepeatedLengths(2), {"OHASDT.1.1", "OHASDT.1.2", "OHASDT.1.3"}),
-    #"Added Custom1" = Table.AddColumn(#"Split Column by Position", "OHASDT", each [OHASDT.1.3] & "/" & [OHASDT.1.2] & "/" & "20" & [OHASDT.1.1]),
-    #"Removed Columns1" = Table.RemoveColumns(#"Added Custom1",{"OHASDT.1.1", "OHASDT.1.2", "OHASDT.1.3"}),
-    #"Added Custom2" = Table.AddColumn(#"Removed Columns1", "Invoice Date", each if [OHASDT] = null then [Fecha] else [OHASDT]),
-    #"Removed Columns2" = Table.RemoveColumns(#"Added Custom2",{"Fecha", "OHASDT"}),
-    #"Changed Type" = Table.TransformColumnTypes(#"Removed Columns2",{{"Invoice Date", type date}}),
-    #"Added Custom3" = Table.AddColumn(#"Changed Type", "Id_SLoc", each [PAIS] & "_" & Number.ToText([XCDIST]) & "_" & [XILOC2]),
-    #"Changed Type1" = Table.TransformColumnTypes(#"Added Custom3",{{"Id_SLoc", type text}}),
-    #"Added Custom4" = Table.AddColumn(#"Changed Type1", "Id_CusBill", each [Id_SLoc] & "_" & Number.ToText([XHCSNO])),
-    #"Changed Type2" = Table.TransformColumnTypes(#"Added Custom4",{{"Id_CusBill", type text}}),
-    #"Added Custom5" = Table.AddColumn(#"Changed Type2", "Id_Distr", each [PAIS] & "_" & Number.ToText([XCDIST])),
-    #"Changed Type3" = Table.TransformColumnTypes(#"Added Custom5",{{"Id_Distr", type text}}),
-    #"Added Custom6" = Table.AddColumn(#"Changed Type3", "Id_CusAcnt", each [Id_Distr] & "_" & Number.ToText([XHCSNO])),
-    #"Changed Type4" = Table.TransformColumnTypes(#"Added Custom6",{{"Id_CusAcnt", type text}}),
-    #"Added Custom7" = Table.AddColumn(#"Changed Type4", "Id_Mat", each Number.ToText([XIPRDC]) & "_" & Text.Trim([XIPRSC]) & "_" & Text.Trim([XIFRMC]) & "_" & Text.Trim([XICONT])),
-    #"Added Custom8" = Table.AddColumn(#"Added Custom7", "Id_SKU", each [Id_SLoc] & "_" & [Id_Mat]),
-    #"Added Custom9" = Table.AddColumn(#"Added Custom8", "Id_Brand", each [Id_Distr] & "_" & ( if [BMBRND] = "6" then "3" else [BMBRND] )),
-    #"Added Custom10" = Table.AddColumn(#"Added Custom9", "Id_SubBrand", each [Id_Distr] & "_" & [SBSBRD]),
-
-    /*--- Id_E2E usa Año y Mes de la fecha ─ sigue funcionando ---*/
-    #"Added Custom11" = Table.AddColumn(#"Added Custom10", "Id_E2E", each Number.ToText(Date.Year([Invoice Date])) & Number.ToText(Date.Month([Invoice Date])) & "_" & [Id_Mat]),
-
-    /*--- Reemplazos de nombres ---*/
-    #"Replaced Value"  = Table.ReplaceValue(#"Added Custom11","TECNOTEMPE S.A.","TECNOTEMPE SA",Replacer.ReplaceText,{"CMCSNM"}),
-    #"Replaced Value1" = Table.ReplaceValue(#"Replaced Value","BIOSUPER SA","BIOSUPER S.A.S.",Replacer.ReplaceText,{"CMCSNM"}),
-    #"Replaced Value2" = Table.ReplaceValue(#"Replaced Value1","PIGALLE SA","PIGALLE S.A.S.",Replacer.ReplaceText,{"CMCSNM"}),
-    #"Replaced Value3" = Table.ReplaceValue(#"Replaced Value2","AGROINDUSTRIAS DAJAHU S.A.","CORPORACION JAVE S.A.",Replacer.ReplaceText,{"CMCSNM"}),
-    #"Replaced Value4" = Table.ReplaceValue(#"Replaced Value3","JESUS DEL GRAN PODER, J.D.G.P. S.A.","JESUS DEL GRAN PODER, J.D.G.P. S.A., J.D.G.P. S.A.",Replacer.ReplaceText,{"CMCSNM"}),
-    #"Replaced Value5" = Table.ReplaceValue(#"Replaced Value4","JESUS DEL GRAN PODER, J.D.G.P. S.A., J.D.G.P. S.A., J.D.G.P. S.A.","JESUS DEL GRAN PODER, J.D.G.P. S.A., J.D.G.P. S.A.",Replacer.ReplaceText,{"CMCSNM"}),
-    #"Replaced Value6" = Table.ReplaceValue(#"Replaced Value5","SUPER FARMACIAS SIMAN, S.A.","SUPER FARMACIA SIMAN, S.A.",Replacer.ReplaceText,{"CMCSNM"}),
-    #"Replaced Value7" = Table.ReplaceValue(#"Replaced Value6","ROGER ELIAN ESPINAL ALVARADO","GRANJA AVICOLA ESPINAL",Replacer.ReplaceText,{"CMCSNM"}),
-    #"Replaced Value8" = Table.ReplaceValue(#"Replaced Value7","GLOBE BUSSINES CREA E.I.R.L.","GLOBE BUSSINES CREA SOCIEDAD ANONIMA",Replacer.ReplaceText,{"CMCSNM"}),
-    #"Replaced Value9" = Table.ReplaceValue(#"Replaced Value8","DISTRIBUIRORES MULTIPLES F&E SAC","DISTRIBUIDORES MULTIPLES F&E S.A.C.",Replacer.ReplaceText,{"CMCSNM"}),
-
-    /*--- Filtro de facturas específicas -------------*/
-    #"Added Custom12" = Table.AddColumn(#"Replaced Value9", "XIONUM&IDCUSBILL", each Number.ToText([XIONUM]) & "_" & [Id_CusBill]),
-    #"Filtered Rows"  = Table.SelectRows(#"Added Custom12", each [#"XIONUM&IDCUSBILL"] <> "39445_051_111_70_888" and
-                                                         [#"XIONUM&IDCUSBILL"] <> "61832_051_111_10_26" and
-                                                         [#"XIONUM&IDCUSBILL"] <> "61641_051_111_10_26" and
-                                                         [#"XIONUM&IDCUSBILL"] <> "61640_051_111_10_26" and
-                                                         [#"XIONUM&IDCUSBILL"] <> "32142_051_111_74_26"),
-    #"Renamed Columns" = Table.RenameColumns(#"Filtered Rows",{{"Material Category", "Material_Category"}}),
-
-    /*----------------------------------------------------------
-     * 2. NUEVO: Clave de mes y agregación
-     *---------------------------------------------------------*/
-    /* 🔑 2.1  Primer día del mes para mantener relación Date */
-    #"Added MonthKey" = Table.AddColumn(#"Renamed Columns", "MonthKey",
-                        each Date.StartOfMonth([Invoice Date]), type date),
-
-    /* 🔄 2.2  Agrupar; incluye todas las dimensiones que
-                necesites segmentar en los visuals */
-    #"Grouped Rows" = Table.Group(
-        #"Added MonthKey",
-        {
-            "MonthKey",    // Fecha de mes
-            "PAIS",
-            "Id_SLoc",
-            "Id_Distr",
-            "Id_CusBill",
-            "Id_CusAcnt",
-            "Id_Mat",
-            "Id_SKU",
-            "Id_Brand",
-            "Id_SubBrand"
-        },
-        {
-            {"Qty",        each List.Sum([Qty]),        type number},
-            {"Sales_USD",  each List.Sum([Sales_USD]),  type number},
-            {"Facturas",   each Table.RowCount(_),      Int64.Type}
-        }
-    ),
-
-    /* 🔁 2.3  Reconstruir Id_E2E basado en MonthKey + Id_Mat */
-    #"Rebuilt_Id_E2E" = Table.AddColumn(#"Grouped Rows", "Id_E2E",
-                        each Number.ToText(Date.Year([MonthKey])) &
-                             Number.ToText(Date.Month([MonthKey])) &
-                             "_" & [Id_Mat]),
-
-    /* 🏷️ 2.4  Llamar de nuevo "Invoice Date" a la clave de mes */
-    #"Renamed Columns 2" = Table.RenameColumns(#"Rebuilt_Id_E2E",
-                        {{"MonthKey", "Invoice Date"}})
+    Source = DataBase_SalesData,
+    #"Filtered Rows" = Table.SelectRows(Source, each [Id_CusBill] = "398_1_13_1032"),
+    #"Grouped Rows" = Table.Group(#"Filtered Rows", {"Id_Mat", "Invoice Date"}, {{"Cst_FIFO", each List.Sum([XZUCOF]), type nullable number}, {"Cst_MKT", each List.Sum([XZMKTF]), type nullable number}, {"TM Facturado", each List.Sum([XIQTSA]), type nullable number}, {"TM Embarcado", each List.Sum([XIWEXT]), type nullable number}}),
+    #"Split Column by Delimiter" = Table.SplitColumn(Table.TransformColumnTypes(#"Grouped Rows", {{"Invoice Date", type text}}, "es-NI"), "Invoice Date", Splitter.SplitTextByDelimiter("/", QuoteStyle.Csv), {"Invoice Date.1", "Invoice Date.2", "Invoice Date.3"}),
+    #"Added Custom" = Table.AddColumn(#"Split Column by Delimiter", "YearMonth", each [Invoice Date.3]&[Invoice Date.2]),
+    #"Grouped Rows1" = Table.Group(#"Added Custom", {"YearMonth", "Id_Mat"}, {{"Cst_FIFO", each List.Sum([Cst_FIFO]), type nullable number}, {"Cst_FIFO.1", each List.Sum([Cst_MKT]), type nullable number}, {"TM Facturado", each List.Sum([TM Facturado]), type nullable number}, {"TM Embarcado", each List.Sum([TM Embarcado]), type nullable number}}),
+    #"Added Custom1" = Table.AddColumn(#"Grouped Rows1", "Id_E2E", each [YearMonth]&"_"&[Id_Mat]),
+    #"Added Custom2" = Table.AddColumn(#"Added Custom1", "Id_Mat2", each if [Id_Mat] = "8396__EX_.2" then "8396__EX_.20" else 
+if [Id_Mat]="8468__EX_.2" then "8468__EX_.20" else
+if [Id_Mat]="8470__EX_.2" then "8470__EX_.20" else
+if [Id_Mat]="7065__EX_.454" then "7055__EX_.454" else
+if [Id_Mat]="7065_NC_EX_8" then "7055__EX_8" else
+if [Id_Mat]="7033__EX_1" then "7046__EX_1" else
+if [Id_Mat]="7033__EX_22.7" then "7046__EX_22.7" else
+if [Id_Mat]="7065_NC_EX_1" then "7055__EX_1" else
+if [Id_Mat]="7065_NC_EX_3" then "7055__EX_3" else
+if [Id_Mat]="7033__EX_4" then "7046__EX_4" else
+if [Id_Mat]="7021__EX_18" then "7021__EX_18KG" else
+if [Id_Mat]="7031__EX_18" then "7031__EX_18KG" else
+if [Id_Mat]="7030__EX_18" then "7130__EX_18KG" else
+if [Id_Mat]="7022__EX_2" then "7022__EX_2KG" else
+if [Id_Mat]="7031__EX_1" then "7031__EX_1KG" else
+if [Id_Mat]="7130__EX_1" then "7030__EX_1KG" else
+if [Id_Mat]="7026__EX_20" then "7026__EX_20KG" else
+if [Id_Mat]="7037__EX_8" then "7037__EX_8KG" else
+if [Id_Mat]="7026__EX_2" then "7026__EX_2KG" else
+if [Id_Mat]="7021__EX_20" then "7021__EX_20KG" else
+if [Id_Mat]="7026__EX_9" then "7026__EX_9KG" else
+if [Id_Mat]="7205_NC_EX_.454" then "7033__EX_.454" else
+if [Id_Mat]="7205_NC_EX_18.1" then "7033__EX_18.1" else
+if [Id_Mat]="7033__EX_2" then "7033__EX_2KG" else
+if [Id_Mat]="7033__EX_4" then "7033__EX_4KG" else
+if [Id_Mat]="7205_NC_EX_9" then "7033__EX_9" else
+if [Id_Mat]="7034__EX_1" then "7034__EX_1KG" else
+if [Id_Mat]="7034__EX_4" then "7034__EX_4KG" else
+if [Id_Mat]="7034__EX_9" then "7034__EX_9KG" else
+if [Id_Mat]="7036__EX_1" then "7036__EX_1KG" else
+if [Id_Mat]="7036__EX_2" then "7036__EX_2KG" else
+if [Id_Mat]="7037__EX_1" then "7037__EX_1KG" else
+if [Id_Mat]="7265_NC_EX_18.1" then "7045__EX_18.1" else
+if [Id_Mat]="7265_NC_EX_2" then "7045__EX_2" else
+if [Id_Mat]="7265_NC_EX_4" then "7045__EX_4" else
+if [Id_Mat]="7050__EX_3" then "7050__EX_3KG" else
+if [Id_Mat]="7066__EX_1" then "7066__EX_1KG" else
+if [Id_Mat]="7066__EX_8" then "7066__EX_8KG" else
+if [Id_Mat]="7072__EX_1" then "7071__EX_2" else
+if [Id_Mat]="7072__EX_8" then "7072__EX_8KG" else
+if [Id_Mat]="7205_NC_EX_2" then "7206__EX_2" else
+if [Id_Mat]="7267__EX_2" then "7267__EX_2KG" else
+if [Id_Mat]="7267__EX_4" then "7267__EX_4KG" else
+if [Id_Mat]="7268__EX_2" then "7268__EX_2KG" else
+if [Id_Mat]="7268__EX_4" then "7268__EX_4KG" else
+if [Id_Mat]="7295__EX_2" then "7295__EX_2KG" else
+if [Id_Mat]="7295__EX_4" then "7295__EX_4KG" else
+if [Id_Mat]="7060__EX_3" then "7060__EX_3KG" else
+if [Id_Mat]="7065_NC_EX_.454" then "7565__EX_1.31" else
+if [Id_Mat]="7267_NC_EX_.454" then "7568__EX_1.36" else
+if [Id_Mat]="7021__EX_4.5" then "7021__EX_4.6K" else
+if [Id_Mat]="7205__EX_4" then "7033__EX_4KG" else
+if [Id_Mat]="7050_NC_EX_1" then "7050__EX_0.9K" else
+if [Id_Mat]="7050_NC_EX_8" then "7050__EX_7.9K" else
+if [Id_Mat]="7060_NC_EX_1" then "7060__EX_0.9K" else
+if [Id_Mat]="7060_NC_EX_8" then "7060__EX_7.9K" else
+if [Id_Mat]="7034__EX_18" then "7134__EX_18KG" else
+if [Id_Mat]="7021__EX_2.27" then "8021__EX_2.27" else
+if [Id_Mat]="7021__EX_9" then "8021__EX_9" else
+if [Id_Mat]="7026__EX_.454" then "8023__EX_.454" else
+if [Id_Mat]="7034__EX_2" then "8034__EX_2" else
+if [Id_Mat]="7030__EX_1" then "7030__EX_1KG" else
+if [Id_Mat]="7030__EX_2" then "7030__EX_2KG" else
+if [Id_Mat]="7030__EX_4" then "7030__EX_4KG" else
+if [Id_Mat]="7031__EX_2" then "7031__EX_2KG" else
+if [Id_Mat]="7031__EX_4" then "7031__EX_4KG" else
+if [Id_Mat]="7031__EX_9" then "7031__EX_9KG" else
+[Id_Mat]),
+    #"Added Custom3" = Table.AddColumn(#"Added Custom2", "Id_Mat3", each if [Id_Mat]="7033__EX_1" then "7046__EX_1KG" else
+if [Id_Mat]="7033__EX_4" then "7046__EX_4KG" else
+if [Id_Mat]="7065_NC_EX_3" then "7055__EX_3KG" else
+if [Id_Mat]="7065_NC_EX_1" then "7064__EX_2" else
+if [Id_Mat]="7072__EX_1" then "7072__EX_1KG" else
+if [Id_Mat]="7066__EX_1" then "7074__EX_2" else
+if [Id_Mat]="7065_NC_EX_1" then "7076__EX_2" else
+if [Id_Mat]="7265_NC_EX_18.1" then "7261__EX_18.1" else
+if [Id_Mat]="7265_NC_EX_2" then "7261__EX_2" else
+if [Id_Mat]="7265_NC_EX_4" then "7261__EX_4" else
+if [Id_Mat]="7205_NC_EX_.454" then "7533__EX_1.36" else
+if [Id_Mat]="7065_NC_EX_8" then "7055__EX_7.9K" else
+if [Id_Mat]="7021__EX_20" then "8021__EX_20" else
+if [Id_Mat]="7021__EX_4.5" then "8021__EX_4.5" else
+if [Id_Mat]="7026__EX_2" then "8023__EX_2" else
+if [Id_Mat]="7034__EX_18" then "8034__EX_18" else
+if [Id_Mat]="7034__EX_4" then "8034__EX_4" else
+if [Id_Mat]="7034__EX_9" then "8034__EX_9" else
+[Id_Mat]),
+    #"Added Custom4" = Table.AddColumn(#"Added Custom3", "Id_Mat4", each if [Id_Mat]="7065_NC_EX_1" then "7055__EX_0.9K" else
+if [Id_Mat]="7065__EX_1" then "7076__EX_2" else
+if [Id_Mat]="7265__EX_2" then "7261__EX_2KG" else
+if [Id_Mat]="7265__EX_4" then "7261__EX_4KG" else
+if [Id_Mat]="7265_NC_EX_2" then "7269__EX_2" else
+if [Id_Mat]="7265_NC_EX_4" then "7269__EX_4" else
+[Id_Mat]),
+    #"Renamed Columns" = Table.RenameColumns(#"Added Custom4",{{"Cst_FIFO.1", "Cst_Mkts"}}),
+    #"Added Custom5" = Table.AddColumn(#"Renamed Columns", "Id_E2E2", each [YearMonth]&"_"&[Id_Mat2]),
+    #"Added Custom6" = Table.AddColumn(#"Added Custom5", "Id_E2E3", each [YearMonth]&"_"&[Id_Mat3]),
+    #"Added Custom7" = Table.AddColumn(#"Added Custom6", "Id_E2E4", each [YearMonth]&"_"&[Id_Mat4])
 in
-    #"Renamed Columns 2"
+    #"Added Custom7"
