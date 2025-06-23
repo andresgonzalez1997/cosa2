@@ -1,108 +1,38 @@
-let
-    Source = DataBase_SalesData,
-    #"Filtered Rows" = Table.SelectRows(Source, each [Id_CusBill] = "398_1_13_1032"),
-    #"Grouped Rows" = Table.Group(#"Filtered Rows", {"Id_Mat", "Invoice Date"}, {{"Cst_FIFO", each List.Sum([XZUCOF]), type nullable number}, {"Cst_MKT", each List.Sum([XZMKTF]), type nullable number}, {"TM Facturado", each List.Sum([XIQTSA]), type nullable number}, {"TM Embarcado", each List.Sum([XIWEXT]), type nullable number}}),
-    #"Split Column by Delimiter" = Table.SplitColumn(Table.TransformColumnTypes(#"Grouped Rows", {{"Invoice Date", type text}}, "es-NI"), "Invoice Date", Splitter.SplitTextByDelimiter("/", QuoteStyle.Csv), {"Invoice Date.1", "Invoice Date.2", "Invoice Date.3"}),
-    #"Added Custom" = Table.AddColumn(#"Split Column by Delimiter", "YearMonth", each [Invoice Date.3]&[Invoice Date.2]),
-    #"Grouped Rows1" = Table.Group(#"Added Custom", {"YearMonth", "Id_Mat"}, {{"Cst_FIFO", each List.Sum([Cst_FIFO]), type nullable number}, {"Cst_FIFO.1", each List.Sum([Cst_MKT]), type nullable number}, {"TM Facturado", each List.Sum([TM Facturado]), type nullable number}, {"TM Embarcado", each List.Sum([TM Embarcado]), type nullable number}}),
-    #"Added Custom1" = Table.AddColumn(#"Grouped Rows1", "Id_E2E", each [YearMonth]&"_"&[Id_Mat]),
-    #"Added Custom2" = Table.AddColumn(#"Added Custom1", "Id_Mat2", each if [Id_Mat] = "8396__EX_.2" then "8396__EX_.20" else 
-if [Id_Mat]="8468__EX_.2" then "8468__EX_.20" else
-if [Id_Mat]="8470__EX_.2" then "8470__EX_.20" else
-if [Id_Mat]="7065__EX_.454" then "7055__EX_.454" else
-if [Id_Mat]="7065_NC_EX_8" then "7055__EX_8" else
-if [Id_Mat]="7033__EX_1" then "7046__EX_1" else
-if [Id_Mat]="7033__EX_22.7" then "7046__EX_22.7" else
-if [Id_Mat]="7065_NC_EX_1" then "7055__EX_1" else
-if [Id_Mat]="7065_NC_EX_3" then "7055__EX_3" else
-if [Id_Mat]="7033__EX_4" then "7046__EX_4" else
-if [Id_Mat]="7021__EX_18" then "7021__EX_18KG" else
-if [Id_Mat]="7031__EX_18" then "7031__EX_18KG" else
-if [Id_Mat]="7030__EX_18" then "7130__EX_18KG" else
-if [Id_Mat]="7022__EX_2" then "7022__EX_2KG" else
-if [Id_Mat]="7031__EX_1" then "7031__EX_1KG" else
-if [Id_Mat]="7130__EX_1" then "7030__EX_1KG" else
-if [Id_Mat]="7026__EX_20" then "7026__EX_20KG" else
-if [Id_Mat]="7037__EX_8" then "7037__EX_8KG" else
-if [Id_Mat]="7026__EX_2" then "7026__EX_2KG" else
-if [Id_Mat]="7021__EX_20" then "7021__EX_20KG" else
-if [Id_Mat]="7026__EX_9" then "7026__EX_9KG" else
-if [Id_Mat]="7205_NC_EX_.454" then "7033__EX_.454" else
-if [Id_Mat]="7205_NC_EX_18.1" then "7033__EX_18.1" else
-if [Id_Mat]="7033__EX_2" then "7033__EX_2KG" else
-if [Id_Mat]="7033__EX_4" then "7033__EX_4KG" else
-if [Id_Mat]="7205_NC_EX_9" then "7033__EX_9" else
-if [Id_Mat]="7034__EX_1" then "7034__EX_1KG" else
-if [Id_Mat]="7034__EX_4" then "7034__EX_4KG" else
-if [Id_Mat]="7034__EX_9" then "7034__EX_9KG" else
-if [Id_Mat]="7036__EX_1" then "7036__EX_1KG" else
-if [Id_Mat]="7036__EX_2" then "7036__EX_2KG" else
-if [Id_Mat]="7037__EX_1" then "7037__EX_1KG" else
-if [Id_Mat]="7265_NC_EX_18.1" then "7045__EX_18.1" else
-if [Id_Mat]="7265_NC_EX_2" then "7045__EX_2" else
-if [Id_Mat]="7265_NC_EX_4" then "7045__EX_4" else
-if [Id_Mat]="7050__EX_3" then "7050__EX_3KG" else
-if [Id_Mat]="7066__EX_1" then "7066__EX_1KG" else
-if [Id_Mat]="7066__EX_8" then "7066__EX_8KG" else
-if [Id_Mat]="7072__EX_1" then "7071__EX_2" else
-if [Id_Mat]="7072__EX_8" then "7072__EX_8KG" else
-if [Id_Mat]="7205_NC_EX_2" then "7206__EX_2" else
-if [Id_Mat]="7267__EX_2" then "7267__EX_2KG" else
-if [Id_Mat]="7267__EX_4" then "7267__EX_4KG" else
-if [Id_Mat]="7268__EX_2" then "7268__EX_2KG" else
-if [Id_Mat]="7268__EX_4" then "7268__EX_4KG" else
-if [Id_Mat]="7295__EX_2" then "7295__EX_2KG" else
-if [Id_Mat]="7295__EX_4" then "7295__EX_4KG" else
-if [Id_Mat]="7060__EX_3" then "7060__EX_3KG" else
-if [Id_Mat]="7065_NC_EX_.454" then "7565__EX_1.31" else
-if [Id_Mat]="7267_NC_EX_.454" then "7568__EX_1.36" else
-if [Id_Mat]="7021__EX_4.5" then "7021__EX_4.6K" else
-if [Id_Mat]="7205__EX_4" then "7033__EX_4KG" else
-if [Id_Mat]="7050_NC_EX_1" then "7050__EX_0.9K" else
-if [Id_Mat]="7050_NC_EX_8" then "7050__EX_7.9K" else
-if [Id_Mat]="7060_NC_EX_1" then "7060__EX_0.9K" else
-if [Id_Mat]="7060_NC_EX_8" then "7060__EX_7.9K" else
-if [Id_Mat]="7034__EX_18" then "7134__EX_18KG" else
-if [Id_Mat]="7021__EX_2.27" then "8021__EX_2.27" else
-if [Id_Mat]="7021__EX_9" then "8021__EX_9" else
-if [Id_Mat]="7026__EX_.454" then "8023__EX_.454" else
-if [Id_Mat]="7034__EX_2" then "8034__EX_2" else
-if [Id_Mat]="7030__EX_1" then "7030__EX_1KG" else
-if [Id_Mat]="7030__EX_2" then "7030__EX_2KG" else
-if [Id_Mat]="7030__EX_4" then "7030__EX_4KG" else
-if [Id_Mat]="7031__EX_2" then "7031__EX_2KG" else
-if [Id_Mat]="7031__EX_4" then "7031__EX_4KG" else
-if [Id_Mat]="7031__EX_9" then "7031__EX_9KG" else
-[Id_Mat]),
-    #"Added Custom3" = Table.AddColumn(#"Added Custom2", "Id_Mat3", each if [Id_Mat]="7033__EX_1" then "7046__EX_1KG" else
-if [Id_Mat]="7033__EX_4" then "7046__EX_4KG" else
-if [Id_Mat]="7065_NC_EX_3" then "7055__EX_3KG" else
-if [Id_Mat]="7065_NC_EX_1" then "7064__EX_2" else
-if [Id_Mat]="7072__EX_1" then "7072__EX_1KG" else
-if [Id_Mat]="7066__EX_1" then "7074__EX_2" else
-if [Id_Mat]="7065_NC_EX_1" then "7076__EX_2" else
-if [Id_Mat]="7265_NC_EX_18.1" then "7261__EX_18.1" else
-if [Id_Mat]="7265_NC_EX_2" then "7261__EX_2" else
-if [Id_Mat]="7265_NC_EX_4" then "7261__EX_4" else
-if [Id_Mat]="7205_NC_EX_.454" then "7533__EX_1.36" else
-if [Id_Mat]="7065_NC_EX_8" then "7055__EX_7.9K" else
-if [Id_Mat]="7021__EX_20" then "8021__EX_20" else
-if [Id_Mat]="7021__EX_4.5" then "8021__EX_4.5" else
-if [Id_Mat]="7026__EX_2" then "8023__EX_2" else
-if [Id_Mat]="7034__EX_18" then "8034__EX_18" else
-if [Id_Mat]="7034__EX_4" then "8034__EX_4" else
-if [Id_Mat]="7034__EX_9" then "8034__EX_9" else
-[Id_Mat]),
-    #"Added Custom4" = Table.AddColumn(#"Added Custom3", "Id_Mat4", each if [Id_Mat]="7065_NC_EX_1" then "7055__EX_0.9K" else
-if [Id_Mat]="7065__EX_1" then "7076__EX_2" else
-if [Id_Mat]="7265__EX_2" then "7261__EX_2KG" else
-if [Id_Mat]="7265__EX_4" then "7261__EX_4KG" else
-if [Id_Mat]="7265_NC_EX_2" then "7269__EX_2" else
-if [Id_Mat]="7265_NC_EX_4" then "7269__EX_4" else
-[Id_Mat]),
-    #"Renamed Columns" = Table.RenameColumns(#"Added Custom4",{{"Cst_FIFO.1", "Cst_Mkts"}}),
-    #"Added Custom5" = Table.AddColumn(#"Renamed Columns", "Id_E2E2", each [YearMonth]&"_"&[Id_Mat2]),
-    #"Added Custom6" = Table.AddColumn(#"Added Custom5", "Id_E2E3", each [YearMonth]&"_"&[Id_Mat3]),
-    #"Added Custom7" = Table.AddColumn(#"Added Custom6", "Id_E2E4", each [YearMonth]&"_"&[Id_Mat4])
-in
-    #"Added Custom7"
+Following up on my previous message, I share the following analysis based on recent tests.
+
+Summary of recent attempts
+
+Time filters: I tried limiting the import or refresh to the most recent period (for example, only from 2024), but I found that when running fiscal-year-to-date measures, the model still requires the full detail and that exceeds resources.
+
+Workshop with Diego: We validated whether any other optimizations could apply in Power BI (grouping after generating keys, removing unused columns/relationships, etc.), and the conclusion was the same: the current structure forces processing a lot of detail for margin calculations; even with later step limitations, performance still exceeds Power BI’s resources.
+
+Removed unnecessary objects: I confirmed with internal support that the root cause lies in the inherited architecture; even without my extensions, a model based on massive incremental detail behaves the same way.
+
+Cache impact: Loading such a large historical dataset into Power BI affects the cache load—CUBOVEN + COBO_HIST. In other words, we end up in the same situation as in CQN Ecuador, where refresh is only allowed at certain times due to cache overflows.
+
+Behavior under filters: Basically, when filtering to a single month or a limited range, it responds; but requesting a full fiscal year causes the query to exceed available resources (“Query has exceeded the available resources”).
+
+Cause of the problem
+
+The current model merges the operational table CUBOVEN with the historical COBO_HIST into a very large fact-like table, without intermediate aggregations or effective partitioning. Moreover, dependent tables (like DataBase_SalesDataE2E, DataBase_SalesData, DataBase_CustomerChannel) use the original DataBase_SalesData as source (after all steps are applied), then apply further steps—so any grouping issue or failure in the original cascades to all others.
+
+Annual cumulative measures and rankings must work over the entire history, so Power BI hits memory/capacity limits.
+
+Power BI is designed for analysis over optimized datasets, not for direct ingestion of massive transactional data without a pre-aggregation layer.
+
+There is no properly structured dimensional model with summarized fact tables and dimensions; without this, Power BI has to process detail on every complex query.
+
+Viable options
+
+Redesign of the data layer:
+As we do in CQN Ecuador, implement a CDP pipeline that ingests the main tables—CUBOVEN and COBO_HIST—from NIS via Sqoop; then apply in that pipeline all current Power Query transformations to produce an optimized, partitioned table; finally, connect Power BI directly to that processed table without further transformations or excessive data overload.
+
+Segmented report as a temporary patch:
+
+Basically continue filtering by month so the current model can show data.
+
+Document this limitation in the assumptions, indicating that long-range analysis requires refactoring.
+
+Quick to implement, but does not satisfy full historical analysis.
+
+I have spent many hours and effort testing all kinds of optimizations because I truly care about delivering a reliable, useful analysis; however, the limitation stems from the inherited structure of CUBOVEN + COBO_HIST and the lack of a prior aggregation layer—factors that are very difficult to control from within Power BI.
