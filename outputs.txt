@@ -1,38 +1,233 @@
-Following up on my previous message, I share the following analysis based on recent tests.
-
-Summary of recent attempts
-
-Time filters: I tried limiting the import or refresh to the most recent period (for example, only from 2024), but I found that when running fiscal-year-to-date measures, the model still requires the full detail and that exceeds resources.
-
-Workshop with Diego: We validated whether any other optimizations could apply in Power BI (grouping after generating keys, removing unused columns/relationships, etc.), and the conclusion was the same: the current structure forces processing a lot of detail for margin calculations; even with later step limitations, performance still exceeds Power BI’s resources.
-
-Removed unnecessary objects: I confirmed with internal support that the root cause lies in the inherited architecture; even without my extensions, a model based on massive incremental detail behaves the same way.
-
-Cache impact: Loading such a large historical dataset into Power BI affects the cache load—CUBOVEN + COBO_HIST. In other words, we end up in the same situation as in CQN Ecuador, where refresh is only allowed at certain times due to cache overflows.
-
-Behavior under filters: Basically, when filtering to a single month or a limited range, it responds; but requesting a full fiscal year causes the query to exceed available resources (“Query has exceeded the available resources”).
-
-Cause of the problem
-
-The current model merges the operational table CUBOVEN with the historical COBO_HIST into a very large fact-like table, without intermediate aggregations or effective partitioning. Moreover, dependent tables (like DataBase_SalesDataE2E, DataBase_SalesData, DataBase_CustomerChannel) use the original DataBase_SalesData as source (after all steps are applied), then apply further steps—so any grouping issue or failure in the original cascades to all others.
-
-Annual cumulative measures and rankings must work over the entire history, so Power BI hits memory/capacity limits.
-
-Power BI is designed for analysis over optimized datasets, not for direct ingestion of massive transactional data without a pre-aggregation layer.
-
-There is no properly structured dimensional model with summarized fact tables and dimensions; without this, Power BI has to process detail on every complex query.
-
-Viable options
-
-Redesign of the data layer:
-As we do in CQN Ecuador, implement a CDP pipeline that ingests the main tables—CUBOVEN and COBO_HIST—from NIS via Sqoop; then apply in that pipeline all current Power Query transformations to produce an optimized, partitioned table; finally, connect Power BI directly to that processed table without further transformations or excessive data overload.
-
-Segmented report as a temporary patch:
-
-Basically continue filtering by month so the current model can show data.
-
-Document this limitation in the assumptions, indicating that long-range analysis requires refactoring.
-
-Quick to implement, but does not satisfy full historical analysis.
-
-I have spent many hours and effort testing all kinds of optimizations because I truly care about delivering a reliable, useful analysis; however, the limitation stems from the inherited structure of CUBOVEN + COBO_HIST and the lack of a prior aggregation layer—factors that are very difficult to control from within Power BI.
+SELECT
+  nis1.*
+FROM
+  (
+    SELECT
+      CAST(f.xmccod AS INT) CreditTerms,
+      CAST(f.cmcuat AS INT) CustomerAcctgType,
+      CAST(f.xiloc2 AS INT) `Location`,
+      CAST(trim(f.lclabb) AS STRING) LocationName,
+      CAST(f.xionum AS INT) OrderNumber,
+      CAST(f.xhotyp AS STRING) OrderType,
+      CAST(f.xhcsno AS INT) CustomerNumber,
+      CAST(trim(f.cmcsnm) AS STRING) CustomerName,
+      Customer.SEGMENTO2 SEGMENT,
+      CAST(trim(f.k7a202) AS STRING) CustomerSegment,
+      CAST(trim(f.xiprdc) AS STRING) ProductCode,
+      CAST(trim(f.xiprsc) AS STRING) SubCode,
+      CAST(trim(f.xifrmc) AS STRING) FormCode,
+      CAST(trim(f.xicont) AS STRING) ContainerCode,
+      CAST(trim(f.xiprds) AS STRING) ProductName,
+      CAST(trim(f.xmplin) AS STRING) ProductLineCode,
+      CAST(trim(f.dpprld) AS STRING) ProductLineCodeName,
+      CAST(trim(f.dgplgp) AS STRING) ProductLineGroup,
+      CAST(trim(f.dgplgd) AS STRING) ProductLineGroupName,
+      CAST(trim(f.xcdist) AS STRING) District,
+      CAST(trim(f.xhtcc) AS STRING) Currency,
+      CAST(trim(f.xhcrr) AS STRING) ExchangeRate,
+      CAST(f.xibgbl AS INT) BagBulk,
+      CAST(f.xiqtsh AS DOUBLE) QtyShipped,
+      CAST(f.xiwext AS DOUBLE) WeightExtended,
+      (
+        CAST(f.xiqtsh AS DOUBLE) * CAST(f.cnusiz AS DOUBLE)
+      ) / 1000 TonsShipped,
+      CAST(f.mtonsold AS DOUBLE) VolumeMT,
+      CAST(f.xiqtsa AS DOUBLE) TonsInvoiced,
+      CAST(f.xifdin AS DOUBLE) FeedIngFlag,
+      CASE WHEN substr(f.ohldoc, 1, 5) = 'S-NDE' THEN -1 * (CAST(f.xdescd AS DOUBLE)) ELSE (CAST(f.xdescd AS DOUBLE)) END DiscountDetail,
+      CASE WHEN substr(f.ohldoc, 1, 5) = 'S-NDE' THEN -1 * (CAST(f.xdesch AS DOUBLE)) ELSE (CAST(f.xdesch AS DOUBLE)) END DiscountHeader,
+      CASE WHEN substr(f.ohldoc, 1, 5) = 'S-NDE' THEN -1 * (CAST(f.xdescp AS DOUBLE)) ELSE (CAST(f.xdescp AS DOUBLE)) END DiscountPromoCharge,
+      CAST(f.xiuprc AS DOUBLE) UnitPrice,
+      CAST(f.xiuprf AS DOUBLE) UnitPriceF,
+      CASE WHEN substr(f.ohldoc, 1, 5) = 'S-NDE' THEN -1 * (CAST(f.xieprc AS DOUBLE)) ELSE (CAST(f.xieprc AS DOUBLE)) END ExtendedPrice,
+      CASE WHEN substr(f.ohldoc, 1, 5) = 'S-NDE' THEN -1 * (CAST(f.xieprf AS DOUBLE)) ELSE (CAST(f.xieprf AS DOUBLE)) END Sales,
+      CASE WHEN substr(f.ohldoc, 1, 5) = 'S-NDE' THEN -1 * (CAST(f.xiucos AS DOUBLE)) ELSE (CAST(f.xiucos AS DOUBLE)) END ExtendedCost,
+      CASE WHEN substr(f.ohldoc, 1, 5) = 'S-NDE' THEN -1 * (CAST(f.xiucof AS DOUBLE)) ELSE (CAST(f.xiucof AS DOUBLE)) END ExtendedCostF,
+      CASE WHEN substr(f.ohldoc, 1, 5) = 'S-NDE' THEN -1 * (CAST(f.xzucos AS DOUBLE)) ELSE (CAST(f.xzucos AS DOUBLE)) END ExtendedRealCost,
+      CASE WHEN substr(f.ohldoc, 1, 5) = 'S-NDE' THEN -1 * (CAST(f.xzucof AS DOUBLE)) ELSE (CAST(f.xzucof AS DOUBLE)) END ExtendedRealCostF,
+      CAST(f.xicsun AS DOUBLE) CostingUnitTU,
+      f.xmtrmg TerritoryManager,
+      f.xmslrc SalesRep,
+      f.cnusiz CNUSIZ,
+      from_unixtime(
+        unix_timestamp(
+          concat(
+            substr(fechaa, 6, 2),
+            '/',
+            substr(fechaa, 4, 2),
+            '/',
+            '20',
+            substr(fechaa, 2, 2),
+            ' ',
+            '00:00:00'
+          ),
+          'dd/MM/yyyy HH:mm:ss'
+        )
+      ) `Date`,
+      concat(f.pais, '_', f.xiloc2) CountryLoc,
+      concat(f.pais, '_', f.xhcsno) CountryClient,
+      concat(f.xiprdc, ' ', f.xifrmc, f.xicont) `Index`,
+      concat(f.pais, '_', f.xiprdc, ' ', f.xifrmc, f.xicont) CountrySKU,
+      concat(
+        substr(f.ohasdt, 6, 2),
+        '-',
+        substr(f.ohasdt, 4, 2),
+        '-',
+        '20',
+        substr(f.ohasdt, 2, 2)
+      ) ActualShpDate,
+      f.fechaa Date2B,
+      f.ohasdt actual_Shp_date,
+      f.pais Pais,
+      f.fechaa fechaa,
+      f.xhprcl xhprcl,
+      f.ohldoc ohldoc,
+      f.ohcmri ohcmri,
+      CASE WHEN f.xicont = 'AP' THEN '25' WHEN f.xicont = 'AX' THEN '25' WHEN f.xicont = 'X   ' THEN 'X' WHEN f.xicont = 'KG' THEN '1' WHEN f.xicont = '01KG' THEN '1' WHEN f.xicont = '20KG' THEN '20' WHEN f.xicont = '25KG' THEN '25' ELSE '1' END UOM,
+      CASE WHEN f.xicont = 'X   ' THEN CAST(f.xiuprc AS DOUBLE) WHEN f.xicont = 'AP' THEN CAST(f.xiuprc AS DOUBLE) * 40 WHEN f.xicont = 'AX' THEN CAST(f.xiuprc AS DOUBLE) * 40 WHEN f.xicont = '25KG' THEN CAST(f.xiuprc AS DOUBLE) * 40 WHEN f.xicont = '20KG' THEN CAST(f.xiuprc AS DOUBLE) * 50 WHEN f.xicont = 'KG' THEN CAST(f.xiuprc AS DOUBLE) * 1000 WHEN f.xicont = '01KG' THEN CAST(f.xiuprc AS DOUBLE) * 1000 ELSE 0 END UnitPriceFAdj,
+      abs(
+        CAST(f.xiucos AS DOUBLE) / CAST(f.xiqtsa AS DOUBLE)
+      ) UnitCostFAdj,
+      CASE WHEN substr(f.ohldoc, 1, 5) = 'S-NDE' THEN -1 * (
+        CASE WHEN trim(f.xicont) = 'X' THEN CAST(f.xiucos AS DOUBLE) WHEN f.xicont = 'AP' THEN CAST(f.xiucos AS DOUBLE) / 40 WHEN f.xicont = 'AX' THEN CAST(f.xiucos AS DOUBLE) / 40 WHEN trim(f.xicont) = '25KG' THEN CAST(f.xiucos AS DOUBLE) / 40 WHEN trim(f.xicont) = '20KG' THEN CAST(f.xiucos AS DOUBLE) / 50 WHEN trim(f.xicont) = 'KG' THEN CAST(f.xiucos AS DOUBLE) / 1000 WHEN trim(f.xicont) = '01KG' THEN CAST(f.xiucos AS DOUBLE) / 1000 ELSE 0 END
+      ) ELSE (
+        CASE WHEN trim(f.xicont) = 'X' THEN CAST(f.xiucos AS DOUBLE) WHEN f.xicont = 'AP' THEN CAST(f.xiucos AS DOUBLE) / 40 WHEN f.xicont = 'AX' THEN CAST(f.xiucos AS DOUBLE) / 40 WHEN trim(f.xicont) = '25KG' THEN CAST(f.xiucos AS DOUBLE) / 40 WHEN trim(f.xicont) = '20KG' THEN CAST(f.xiucos AS DOUBLE) / 50 WHEN trim(f.xicont) = 'KG' THEN CAST(f.xiucos AS DOUBLE) / 1000 WHEN trim(f.xicont) = '01KG' THEN CAST(f.xiucos AS DOUBLE) / 1000 ELSE 0 END
+      ) END ExtendedCostFAdj,
+      CASE WHEN substr(f.ohldoc, 1, 5) = 'S-NDE' THEN -1 * (
+        CAST(f.xdescd AS DOUBLE) + CAST(f.xdesch AS DOUBLE) + CAST(f.xdescp AS DOUBLE)
+      ) ELSE (
+        CAST(f.xdescd AS DOUBLE) + CAST(f.xdesch AS DOUBLE) + CAST(f.xdescp AS DOUBLE)
+      ) END Discount,
+      Customer.Holding_Group_Of `GROUP`,
+      CASE WHEN substr(f.ohldoc, 1, 5) = 'S-NDE' THEN -1 * (
+        CAST(f.xieprc AS DOUBLE) - (
+          CAST(f.xdescd AS DOUBLE) + CAST(f.xdesch AS DOUBLE) + CAST(f.xdescp AS DOUBLE)
+        )
+      ) / 1000 ELSE (
+        CAST(f.xieprc AS DOUBLE) - (
+          CAST(f.xdescd AS DOUBLE) + CAST(f.xdesch AS DOUBLE) + CAST(f.xdescp AS DOUBLE)
+        )
+      ) / 1000 END NetRevenueKUS,
+      CAST(
+        CASE WHEN substr(f.ohldoc, 1, 5) = 'S-NDE' THEN -1 * (
+          CASE WHEN trim(f.xicont) = 'X' THEN CAST(f.xiucos AS DOUBLE) WHEN f.xicont = 'AP' THEN CAST(f.xiucos AS DOUBLE) / 40 WHEN f.xicont = 'AX' THEN CAST(f.xiucos AS DOUBLE) / 40 WHEN trim(f.xicont) = '25KG' THEN CAST(f.xiucos AS DOUBLE) / 40 WHEN trim(f.xicont) = '20KG' THEN CAST(f.xiucos AS DOUBLE) / 50 WHEN trim(f.xicont) = 'KG' THEN CAST(f.xiucos AS DOUBLE) / 1000 WHEN trim(f.xicont) = '01KG' THEN CAST(f.xiucos AS DOUBLE) / 1000 ELSE 0 END
+        ) ELSE (
+          CASE WHEN trim(f.xicont) = 'X' THEN CAST(f.xiucos AS DOUBLE) WHEN f.xicont = 'AP' THEN CAST(f.xiucos AS DOUBLE) / 40 WHEN f.xicont = 'AX' THEN CAST(f.xiucos AS DOUBLE) / 40 WHEN trim(f.xicont) = '25KG' THEN CAST(f.xiucos AS DOUBLE) / 40 WHEN trim(f.xicont) = '20KG' THEN CAST(f.xiucos AS DOUBLE) / 50 WHEN trim(f.xicont) = 'KG' THEN CAST(f.xiucos AS DOUBLE) / 1000 WHEN trim(f.xicont) = '01KG' THEN CAST(f.xiucos AS DOUBLE) / 1000 ELSE 0 END
+        ) END AS DOUBLE
+      ) / 1000 `Cost`,
+      CAST(
+        (
+          CASE WHEN substr(fechaa, 4, 2) IN ('10', '11', '12', '06', '07', '08', '09') THEN CAST(
+            CAST(concat('20', substr(fechaa, 2, 2)) AS DOUBLE) + 1 AS STRING
+          ) ELSE concat('20', substr(fechaa, 2, 2)) END
+        ) AS INT
+      ) fiscal_year,
+      CASE WHEN substr(fechaa, 4, 2) IN ('10', '11', '12', '06', '07', '08', '09') THEN concat(
+        'FY',
+        CAST(
+          CAST(substr(fechaa, 2, 2) AS DOUBLE) + 1 AS STRING
+        )
+      ) ELSE concat('FY', substr(fechaa, 2, 2)) END `YEAR`,
+      concat(trim(f.xiprdc), trim(f.xiprsc)) SKUCode,
+      concat(
+        (
+          CASE WHEN substr(fechaa, 4, 2) IN ('10', '11', '12', '06', '07', '08', '09') THEN concat(
+            'FY',
+            CAST(
+              CAST(substr(fechaa, 2, 2) AS DOUBLE) + 1 AS STRING
+            )
+          ) ELSE concat('FY', substr(fechaa, 2, 2)) END
+        ),
+        CAST(f.xhcsno AS STRING)
+      ) Profitability,
+      concat(trim(f.xiprdc), '_', trim(f.xiprsc)) SKU_Code,
+      CAST(CAST(substr(fechaa, 4, 2) AS DOUBLE) AS INT) `Month`,
+      CAST(concat('20', substr(fechaa, 2, 2)) AS INT) Year_Num,
+      CAST(CAST(substr(fechaa, 4, 2) AS DOUBLE) AS STRING) Month_num,
+      concat(
+        CAST(CAST(substr(fechaa, 4, 2) AS DOUBLE) AS STRING),
+        '_',
+        CAST(concat('20', substr(fechaa, 2, 2)) AS STRING)
+      ) Month_Year_Nat,
+      m.size_mm,
+      m.form,
+      m.stage,
+      m.planta,
+      m.`Stage + Form` stageandform,
+      m.Protein,
+      y.type_transport,
+      y.Delivery_Point,
+      y.location_id,
+      y.prov prov,
+      CASE WHEN Customer.Holding_Group_Of IN ('EMPAGRAN', 'Logistica', 'INTERCOMPANY') THEN 'NA' ELSE y.type_transport END TransportationType,
+      CASE WHEN Customer.Holding_Group_Of IN ('EMPAGRAN', 'Logistica', 'INTERCOMPANY') THEN 'NA' ELSE y.Delivery_Point END MainDeliveryPoint
+      FROM
+      dev_internal_anh_customer_profitability.nis_qbovtapri f
+      LEFT OUTER JOIN (
+        SELECT
+          NEW_CUSTOMER.Codigo Codigo,
+          trim(NEW_CUSTOMER.SEGMENTO_2) SEGMENTO2,
+          trim(NEW_CUSTOMER.grupo_holding) Holding_Group_Of
+        FROM
+          (
+            SELECT
+              t.*,
+              CASE WHEN t.responsable = 'FINANZAS' THEN 'Finanzas' WHEN t.responsable = 'ADMINISTRACION' THEN 'Adm.' WHEN t.responsable = 'SERVICIOS GENERALES' THEN 'Servicios Generales' WHEN t.responsable = 'RMS' THEN 'RMS' WHEN t.responsable = 'LOGISTICA' THEN 'Logistica' WHEN t.responsable = t.estructura
+              AND length(t.responsable) > 3 THEN t.estructura WHEN t.Segmentation_Cargill_Segment = 'KOBE - STRATEGIC' THEN 'Kobe Strategic' WHEN t.Segmentation_Cargill_Segment = 'NOAH - CLASSIC' THEN 'Noah Classic' WHEN t.Segmentation_Cargill_Segment = 'NOAH - BASE' THEN 'Noah Base' WHEN t.Segmentation_Cargill_Segment = 'NOAH - STRATEGIC' THEN 'Noah Strategic' WHEN t.Segmentation_Cargill_Segment = 'KOBE - CLASSIC' THEN 'Kobe Classic' WHEN t.Segmentation_Cargill_Segment = 'DENNIS' THEN 'Dennis' WHEN trim(t.Segmentation_Cargill_Segment) IS NULL THEN 'Noah Base' ELSE 'FALTA' END SEGMENTO_2
+            FROM
+              (
+                SELECT
+                  l.*,
+                  ec.grupo_holding Segmentation_Holding,
+                  ec.group_id Segmentation_Group,
+                  ec.cargill_segment Segmentation_Cargill_Segment
+                FROM
+                  dev_internal_anh_customer_profitability.tb_listado_codigo_clientes l
+                  LEFT OUTER JOIN dev_internal_anh_customer_profitability.tb_ec_customer_segmentation ec ON l.group_id = ec.group_id
+              ) t
+          ) new_customer
+        GROUP BY
+          NEW_CUSTOMER.Codigo,
+          trim(NEW_CUSTOMER.SEGMENTO_2),
+          trim(NEW_CUSTOMER.grupo_holding)
+      ) customer ON F.xhcsno = Customer.Codigo
+      LEFT OUTER JOIN (
+        SELECT
+           trim(t.full_code) full_code,
+          CASE WHEN CAST(trim(t.size_mm) AS STRING) = 'NaN' THEN '0' ELSE CAST(trim(t.size_mm) AS STRING) END size_mm,
+          CASE WHEN CAST(trim(t.number_protein) AS STRING) = 'NaN' THEN '0' ELSE CAST(trim(t.number_protein) AS STRING) END number_protein,
+          trim(t.form) form,
+          trim(t.stage) stage,
+          trim(t.localidad) planta,
+          concat(trim(t.stage), ' ', trim(t.form)) `Stage + Form`,
+          CAST(
+            trim(
+              CASE WHEN CAST(trim(t.number_protein) AS STRING) = 'NaN' THEN '0' ELSE CAST(trim(t.number_protein) AS STRING) END
+            ) AS DOUBLE
+          ) * 100 Protein
+        FROM
+          dev_internal_anh_customer_profitability.tb_new_material_master t
+      ) m ON concat(trim(f.xiprdc), trim(f.xiprsc)) = trim(m.full_code)
+      LEFT OUTER JOIN (
+        SELECT
+          trim(s.type_transport) type_transport,
+          trim(s.delivery_point) Delivery_Point,
+          CAST(trim(s.location_) AS STRING) location_id,
+          trim(s.od) Od,
+          CAST(trim(s.code_customer) AS STRING) code_customer,
+          trim(s.province) prov
+        FROM
+          dev_internal_anh_customer_profitability.tb_cost_to_serve s
+        GROUP BY
+          trim(s.type_transport),
+          trim(s.delivery_point),
+          CAST(trim(s.location_) AS STRING),
+          trim(s.od),
+          CAST(trim(s.code_customer) AS STRING),
+          trim(s.province)
+      ) y ON trim(f.xhcsno) = y.code_customer
+      AND trim(f.xionum) = y.Od
+      AND trim(f.xiloc2) = y.location_id
+    WHERE
+      f.fechaa >= '1230601'
+  ) nis1
