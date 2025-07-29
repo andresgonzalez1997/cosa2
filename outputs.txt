@@ -1,16 +1,19 @@
+-------
+
+
+
+
+
 Sku_final :=
-VAR _nuevoPorCodigo =
+VAR _sku = nis[Sku_Code]
+VAR _nuevo =
     CALCULATE (
         MAXX (
-            TOPN (
-                1,
-                FILTER ( 'tb_equivalences_sku',
-                    'tb_equivalences_sku'[full_code] = nis[Sku_Code]
-                ),
-                'tb_equivalences_sku'[load_date], DESC
+            FILTER ( 'tb_equivalences_sku',
+                'tb_equivalences_sku'[full_code] = _sku
             ),
             'tb_equivalences_sku'[full_code_new]
         )
     )
 RETURN
-COALESCE ( _nuevoPorCodigo, nis[Sku_Code] )
+COALESCE ( _nuevo, _sku )
