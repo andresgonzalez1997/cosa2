@@ -1,25 +1,16 @@
-Sku_canonico :=
-VAR _byCode =
+Sku_final :=
+VAR _nuevoPorCodigo =
     CALCULATE (
         MAXX (
             TOPN (
                 1,
-                FILTER ( 'tb_equivalences_sku', 'tb_equivalences_sku'[full_code] = nis[Sku_Code] ),
-                'tb_equivalences_sku'[load_date], DESC
-            ),
-            'tb_equivalences_sku'[full_code_new]
-        )
-    )
-VAR _byName =
-    CALCULATE (
-        MAXX (
-            TOPN (
-                1,
-                FILTER ( 'tb_equivalences_sku', 'tb_equivalences_sku'[description] = nis[product name] ),
+                FILTER ( 'tb_equivalences_sku',
+                    'tb_equivalences_sku'[full_code] = nis[Sku_Code]
+                ),
                 'tb_equivalences_sku'[load_date], DESC
             ),
             'tb_equivalences_sku'[full_code_new]
         )
     )
 RETURN
-COALESCE ( _byCode, _byName, nis[Sku_Code] )
+COALESCE ( _nuevoPorCodigo, nis[Sku_Code] )
