@@ -1,19 +1,24 @@
--------
+Objective
+Own, maintain, and improve the data solutions for CQN Ecuador and MX Pricing Tool — including support, new business requirements, adjustments, and validated deliveries — with full traceability and access control, sustaining high customer satisfaction continuously.
 
+Metrics
 
+Deliver at least 90% of reports/dashboards and requests on the agreed date by the end of FY26.
 
+Complete requirements gathering and sign-off for at least 90% of new requests before starting work.
 
+Apply exploratory data analysis to at least 90% of requests before development begins.
 
-Sku_final :=
-VAR _sku = nis[Sku_Code]
-VAR _nuevo =
-    CALCULATE (
-        MAXX (
-            FILTER ( 'tb_equivalences_sku',
-                'tb_equivalences_sku'[full_code] = _sku
-            ),
-            'tb_equivalences_sku'[full_code_new]
-        )
-    )
-RETURN
-COALESCE ( _nuevo, _sku )
+Keep 100% of work (requests, status, owners, dates) tracked and updated in the tracking tool.
+
+Maintain 100% validated Row-Level Security on critical dashboards for specific customers, with full access configured for privileged customers.
+
+Achieve 90% customer satisfaction in post-delivery feedback on key versions.
+
+Demonstrate ownership of CQN Ecuador and MX Pricing Tool by:
+
+Keeping a prioritized and current backlog,
+
+Conducting regular check-ins with stakeholders, and
+
+Resolving at least 90% of high-priority incidents by the end of FY26.
