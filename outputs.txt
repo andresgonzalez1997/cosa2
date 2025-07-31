@@ -1,14 +1,8 @@
 Objective
-Maintain and operate the two Competitive Data Analysis projects for North America, ensuring continuity of the pipelines (automatic ingestion of manual files and processing of horizontal files), providing support, capturing changes/requirements, and keeping documentation current, with the goal of achieving fully automated ingestion by the end of FY26.
+Deeply learn the ANH Americas business — including support drivers, material margin, and the five-level initiatives — and translate that knowledge into concrete improvements in data products and their alignment with strategy.
 
 Metrics
 
-Maintain at least 99% availability of the PDF files uploaded to CDP so they appear current in Tableau.
+Complete at least 2 core trainings on the load business, support drivers, material margin, five-level initiative structure, or regional strategy by the end of FY26.
 
-Achieve 100% automation of the ingestion of manual and horizontal files by the end of FY26.
-
-Complete and get approval for at least 90% of new changes in the process documentation (diagrams, code, runbooks, recovery steps) by the end of FY26.
-
-Keep the ingestion error rate at no more than 5% monthly toward the end of FY26.
-
-Receive stakeholder feedback with a rating of ≥4/5 on support and operation for key deliveries.
+Complete at least 2 trainings on strategic data tools used in the business (e.g., Tableau, Snowflake, advanced Power BI) by the end of FY26.
