@@ -1,8 +1,15 @@
-Objective
-Deeply learn the ANH Americas business — including support drivers, material margin, and the five-level initiatives — and translate that knowledge into concrete improvements in data products and their alignment with strategy.
+Scale and stabilize SKU profitability analysis for Latam Central and Canada - covering the current Top Sku: NIS-to-dashboard project (top-performing SKUs, seasonality, and max-mins)— and prepared to capture and prioritize the upcoming projects for Latam Central.
 
-Metrics
+Deliver at least 90 percent of dashboard updates, support tickets, and new requests on the agreed date.
 
-Complete at least 2 core trainings on the load business, support drivers, material margin, five-level initiative structure, or regional strategy by the end of FY26.
+Maintain dashboard performance so that load processes and internal operations are not impacted.
 
-Complete at least 2 trainings on strategic data tools used in the business (e.g., Tableau, Snowflake, advanced Power BI) by the end of FY26.
+Log and prioritize all incoming requests and new projects with the ANH team, ensuring requirements are captured.
+
+Conduct exploratory analysis on all critical proposals before beginning development.
+
+Keep documentation (data flow, assumptions, query logic, support runbook) current and formally approved.
+
+Achieve stakeholder satisfaction of at least four out of five on support responsiveness and clarity of scope.
+
+Perform interim validation or scoping reviews with the team and stakeholders before final implementation.
