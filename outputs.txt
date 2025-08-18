@@ -228,3 +228,352 @@ and FROM_UNIXTIME(
                         '20', SUBSTR(f.fechaa, 2, 2), ' ',
                         '00:00:00'),
                        'dd/MM/yyyy HH:mm:ss')) <= (case when cast(day(now()) as int) > 9 then last_day(add_months(now(),-1)) else last_day(add_months(now(),-2)) end);
+
+-----------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------
+
+
+SELECT 
+        cast(f.xmccod as int) as "credit_terms", 
+        cast(f.cmcuat as int) as "customer_acctg_type", 
+        cast(f.xiloc2 as int) as "location", 
+        cast(trim(f.lclabb) as string) as "Location Name", 
+        cast(f.xionum as int) as "Order Number", 
+        cast(f.xhotyp as string) as "Order Type", 
+        cast(f.xhcsno as int) as "Customer Number", 
+        cast(trim(f.cmcsnm) as string) as "Customer Name", 
+        Customer.SEGMENTO2 as "Segment",
+        cast(trim(f.k7a202) as string) as "customer_segment", 
+        /* NUEVO: clasificación rebate (mes + fallback) */
+        CASE 
+          WHEN cnm.rebate IS NOT NULL AND TRIM(cnm.rebate) <> '' THEN cnm.rebate
+          WHEN cnl.rebate IS NOT NULL AND TRIM(cnl.rebate) <> '' THEN cnl.rebate
+          ELSE 'NaN'
+        END AS "rebate",
+        cast(trim(f.xiprdc) as string) as "Product Code", 
+        cast(trim(f.xiprsc) as string) as "Sub Code", 
+        cast(trim(f.xifrmc) as string) as "Form Code", 
+        cast(trim(f.xicont) as string) as "Container Code", 
+        cast(trim(f.xiprds) as string) as "Product Name", 
+        cast(trim(f.xmplin) as string) as "Product Line Code", 
+        cast(trim(f.dpprld) as string) as "Product Line Code Name", 
+        cast(trim(f.dgplgp) as string) as "Product Line Group", 
+        cast(trim(f.dgplgd) as string) as "Product Line Group Name", 
+        cast(trim(f.xcdist) as string) as "District", 
+        cast(trim(f.xhtcc) as string) as "Currency", 
+        cast(trim(f.xhcrr) as string) as "Exchange Rate", 
+        cast(f.xibgbl as int) as "Bag/Bulk", 
+        cast(f.xiqtsh as double) as "Qty Shipped", 
+        cast(f.xiwext as double) as "Weight Extended", 
+        (cast(f.xiqtsh as DOUBLE)*cast(f.cnusiz as double))/1000 as "Tons Shipped",
+        cast(f.mtonsold as double) as "Volume (MT)",
+        cast(f.xiqtsa as double) as "Tons Invoiced", 
+        cast(f.xifdin as double) as "Feed/Ing Flag", 
+        cast(f.xdescd as double) as "Discount Detail", 
+        cast(f.xdesch as double) as "Discount Header", 
+        cast(f.xdescp as double) as "Discount Promo Charge", 
+        cast(f.xiuprc as double) as "Unit Price", 
+        cast(f.xiuprf as double) as "Unit Price F", 
+        cast(f.xieprc as double) as "Extended Price", 
+        cast(f.xieprf as double) as "$ Sales", 
+        cast(f.xiucos as double) as "Extended Cost", 
+        cast(f.xiucof as double) as "Extended Cost F", 
+        cast(f.xzucos as double) as "Extended Real Cost", 
+        cast(f.xzucof as double) as "Extended Real Cost F", 
+        cast(f.xicsun as double) as "Costing Unit T/U", 
+        f.xmtrmg as "Territory Manager", 
+        f.xmslrc as "Sales Rep", 
+        f.cnusiz as "CNUSIZ",
+        FROM_UNIXTIME(
+            UNIX_TIMESTAMP(
+                CONCAT(
+                    SUBSTR(fechaa, 6, 2), '/',
+                    SUBSTR(fechaa, 4, 2), '/',
+                        '20', SUBSTR(fechaa, 2, 2), ' ',
+                        '00:00:00'),
+                       'dd/MM/yyyy HH:mm:ss')) AS "Date",
+        concat(f.pais,"_",f.xiloc2) as "Country_Loc",
+        concat(f.pais,"_",f.xhcsno) as "Country_Client",
+        concat(f.xiprdc," ",f.xifrmc,f.xicont) as "Index",
+        concat(f.pais,"_",f.xiprdc," ",f.xifrmc,f.xicont) as "Country_SKU",
+        concat(substr(f.ohasdt,6 ,2),"-",substr(f.ohasdt,4 ,2),"-","20",substr(f.ohasdt,2 ,2)) as "Actual Shp. Date",
+        f.fechaa as "z.Date2B",
+        f.ohasdt as "z.actual_Shp_date", 
+        f.pais as "z.Pais", 
+        f.fechaa as "z.fechaa",
+        f.xhprcl as "z.xhprcl",
+        f.ohldoc as "ohldoc", 
+        f.ohcmri as "z.ohcmri", 
+        case
+            when f.xicont = "AP" then "25"
+            when f.xicont = "AX" then "25"
+            when f.xicont = "X   " then "X"
+            when f.xicont = "KG" then "1"
+            when f.xicont = "01KG" then "1"
+            when f.xicont = "20KG" then "20"
+            when f.xicont = "25KG" then "25"
+            else "1"
+            end as "UOM",
+        case
+            when f.xicont = "X   " then cast(f.xiuprc as double)
+            when f.xicont = "AP" then cast(f.xiuprc as double)*40
+            when f.xicont = "AX" then cast(f.xiuprc as double)*40
+            when f.xicont = "25KG" then cast(f.xiuprc as double)*40
+            when f.xicont = "20KG" then cast(f.xiuprc as double)*50
+            when f.xicont = "KG" then cast(f.xiuprc as double)*1000
+            when f.xicont = "01KG" then cast(f.xiuprc as double)*1000
+            else 0
+            end as "Unit Price (F) Adj.",
+        abs(cast(f.xiucos as double)/cast(f.xiqtsa as double)) as "Unit Cost (F) Adj.",
+        case
+            when trim(f.xicont) = "X" then cast(f.xiucos as double)
+            when f.xicont = "AP" then cast(f.xiucos as double)/40
+            when f.xicont = "AX" then cast(f.xiucos as double)/40
+            when trim(f.xicont) = "25KG" then cast(f.xiucos as double)/40
+            when trim(f.xicont) = "20KG" then cast(f.xiucos as double)/50
+            when trim(f.xicont) = "KG" then cast(f.xiucos as double)/1000
+            when trim(f.xicont) = "01KG" then cast(f.xiucos as double)/1000
+            else 0
+            end as "Extended Cost (F) Adj.",
+        cast(f.xdescd as double) + cast(f.xdesch as double) + cast(f.xdescp as double) as "$ Discount",
+        Customer.Holding_Group_Of as "GROUP",
+        (cast(f.xieprc as double)-(cast(f.xdescd as double) + cast(f.xdesch as double) + cast(f.xdescp as double)))/1000 as "Net revenue KUS",
+        (cast((case
+            when trim(f.xicont) = "X" then cast(f.xiucos as double)
+            when f.xicont = "AP" then cast(f.xiucos as double)/40
+            when f.xicont = "AX" then cast(f.xiucos as double)/40
+            when trim(f.xicont) = "25KG" then cast(f.xiucos as double)/40
+            when trim(f.xicont) = "20KG" then cast(f.xiucos as double)/50
+            when trim(f.xicont) = "KG" then cast(f.xiucos as double)/1000
+            when trim(f.xicont) = "01KG" then cast(f.xiucos as double)/1000
+            else 0
+            end) as double)/1000) as "Cost",
+        cast((case 
+            when SUBSTR(fechaa, 4, 2) in ('10','11','12','06','07','08','09') 
+            then cast(cast(concat('20', SUBSTR(fechaa, 2, 2)) as double) +1 as string)
+            else concat('20', SUBSTR(fechaa, 2, 2)) end) as int) as 'fiscal_year',
+         case 
+            when SUBSTR(fechaa, 4, 2) in ('10','11','12','06','07','08','09') 
+            then concat("FY",cast(cast(SUBSTR(fechaa, 2, 2) as double) +1 as string))
+            else concat("FY",SUBSTR(fechaa, 2, 2)) end as "YEAR",
+        concat(trim(f.xiprdc),trim(f.xiprsc)) as "SKU Code",
+        concat((case 
+            when SUBSTR(fechaa, 4, 2) in ('10','11','12','06','07','08','09') 
+            then concat("FY",cast(cast(SUBSTR(fechaa, 2, 2) as double) +1 as string))
+            else concat("FY",SUBSTR(fechaa, 2, 2)) end),cast(f.xhcsno as string)) as "Profitability",
+        concat(trim(f.xiprdc),"_",trim(f.xiprsc)) as "SKU.Code",
+        cast(cast(SUBSTR(fechaa, 4, 2) as double) as int) as "Month",
+        cast(concat('20', SUBSTR(fechaa, 2, 2)) as INT) as "Year_Num",
+        cast(cast(SUBSTR(fechaa, 4, 2) as double) as string) as "Month_num",
+        concat(cast(cast(SUBSTR(fechaa, 4, 2) as DOUBLE) as string),"_",cast(concat('20', SUBSTR(fechaa, 2, 2)) as string)) as "Month_Year_Nat",
+        m.size_mm,
+        m.form,
+        m.stage,
+        CASE 
+        WHEN f.xcdist = "110" THEN "FKT" 
+        WHEN f.xcdist = "111" THEN "DURAN"
+        WHEN f.xcdist = "121" THEN "GYE"
+        ELSE "Distrito NO identificado"
+        END AS "planta",
+        m.`Stage + Form`as "stage + form",
+        m.Protein,
+        y.type_transport,
+        y.Delivery_Point,
+        y.location_id,
+        y.`¨Province` as "province",
+        Case
+            when Customer.Holding_Group_Of in ("EMPAGRAN","Logistica","INTERCOMPANY") then "NA" else y.type_transport end as "Transportation type",
+        Case
+            when Customer.Holding_Group_Of in ("EMPAGRAN","Logistica","INTERCOMPANY") then "NA" else y.Delivery_Point end as "Main delivery Point"
+FROM dev_internal_anh_customer_profitability.nis_filtered_segments_vw as f
+
+LEFT JOIN 
+(
+  SELECT NEW_CUSTOMER.Codigo AS Codigo,
+         TRIM(NEW_CUSTOMER.SEGMENTO_2) as SEGMENTO2,
+         TRIM(NEW_CUSTOMER.grupo_holding) as Holding_Group_Of
+  FROM
+  (
+    SELECT t.*,
+           case 
+             when t.responsable = "FINANZAS" then "Finanzas" 
+             when t.responsable = "ADMINISTRACION" then "Adm."
+             when t.responsable = "SERVICIOS GENERALES" then "Servicios Generales"
+             when t.responsable = "RMS" then "RMS"
+             when t.responsable = "LOGISTICA" then "Logistica"
+             when t.responsable = t.estructura and length(t.responsable) > 3 then t.estructura
+             when t.Segmentation_Cargill_Segment = "KOBE - STRATEGIC" then "Kobe Strategic" 
+             when t.Segmentation_Cargill_Segment = "NOAH - CLASSIC" then  "Noah Classic"
+             when t.Segmentation_Cargill_Segment = "NOAH - BASE" then "Noah Base" 
+             when t.Segmentation_Cargill_Segment = "NOAH - STRATEGIC" then "Noah Strategic"
+             when t.Segmentation_Cargill_Segment = "KOBE - CLASSIC" then "Kobe Classic"
+             when t.Segmentation_Cargill_Segment = "DENNIS" then "Dennis"
+             when TRIM(t.Segmentation_Cargill_Segment) is null then 'Noah Base'
+             else "FALTA" 
+           END SEGMENTO_2
+    from (
+      SELECT 
+        l.*,
+        ec.grupo_holding as Segmentation_Holding,
+        ec.group_id as Segmentation_Group,
+        ec.cargill_segment as Segmentation_Cargill_Segment
+      FROM dev_internal_anh_customer_profitability.tb_listado_codigo_clientes_new l
+      LEFT JOIN dev_internal_anh_customer_profitability.tb_ec_customer_segmentation ec 
+        ON l.group_id = ec.group_id
+    ) as T
+  ) as NEW_CUSTOMER 
+  group by 1,2,3
+) as Customer
+  on F.xhcsno = Customer.Codigo
+
+LEFT JOIN 
+(
+  SELECT 
+     TRIM(t.code_sku)                        as "full_code",
+     case when cast(TRIM(t.caliber_sku) as string) = 'NaN' then '0' else cast(TRIM(t.caliber_sku) as string) end as "size_mm",
+     case when cast(TRIM(t.protein_sku) as string) = 'NaN' then '0' else cast(TRIM(t.protein_sku) as string) end as "number_protein",
+     TRIM(t.form_sku)                        as "form",
+     TRIM(t.stage_sku)                       as "stage",
+     TRIM(t.name_plant)                      as "planta",
+     CONCAT(TRIM(t.stage_sku),' ',TRIM(t.form_sku)) as "Stage + Form",
+     CASE 
+        WHEN t.protein_sku IS NULL
+          OR TRIM(t.protein_sku) = ''
+          OR lower(TRIM(t.protein_sku)) = 'NaN' THEN NULL
+        ELSE TRIM(t.protein_sku)
+     END as "Protein"
+  FROM dev_internal_anh_customer_profitability.tb_new_material_master as t
+) as m 
+  on CONCAT(TRIM(f.xiprdc),TRIM(f.xiprsc)) = TRIM(m.full_code)
+
+LEFT JOIN 
+(
+  SELECT
+      TRIM(s.type_transport)    as "type_transport",
+      TRIM(s.delivery_point)    as "Delivery_Point",
+      CAST(TRIM(s.location_) AS string) AS "location_id",
+      TRIM(s.od)                as "Od",
+      CAST(TRIM(s.code_customer) AS string) AS "code_customer",
+      TRIM(s.province)          as "¨Province"
+  FROM dev_internal_anh_customer_profitability.tb_cost_to_serve as s
+  GROUP BY 1,2,3,4,5,6
+) as y 
+  on TRIM(f.xhcsno)= y.code_customer 
+ and TRIM(f.xionum) = y.Od 
+ and TRIM(f.xiloc2) = y.location_id
+
+/* ===================== CREDIT NOTES: match por MES ===================== */
+LEFT JOIN (
+  SELECT cliente_id, code, sub_code, form, mes_ano_norm, rebate
+  FROM (
+    SELECT
+      TRIM(CAST(numero_cliente AS STRING)) AS cliente_id,
+      TRIM(CAST(codigo          AS STRING)) AS code,
+      TRIM(CAST(sub_codigo      AS STRING)) AS sub_code,
+      TRIM(CAST(forma           AS STRING)) AS form,
+      TRIM(rebate) AS rebate,
+
+      /* Normaliza mes_ano a 'MM-YYYY' (acepta 'MM-YYYY', 'MM/YYYY' o 'YYYY-MM') */
+      CASE
+        WHEN LENGTH(TRIM(mes_ano)) = 7 AND SUBSTR(TRIM(mes_ano),3,1) IN ('-','/')
+          THEN CONCAT(SUBSTR(TRIM(mes_ano),1,2),'-',SUBSTR(TRIM(mes_ano),4,4))        -- MM-YYYY
+        WHEN LENGTH(TRIM(mes_ano)) = 7 AND SUBSTR(TRIM(mes_ano),5,1) = '-'
+          THEN CONCAT(SUBSTR(TRIM(mes_ano),6,2),'-',SUBSTR(TRIM(mes_ano),1,4))        -- YYYY-MM -> MM-YYYY
+        ELSE TRIM(mes_ano)
+      END AS mes_ano_norm,
+
+      UNIX_TIMESTAMP(
+        CONCAT('01-',
+          CASE
+            WHEN LENGTH(TRIM(mes_ano)) = 7 AND SUBSTR(TRIM(mes_ano),3,1) IN ('-','/')
+              THEN CONCAT(SUBSTR(TRIM(mes_ano),1,2),'-',SUBSTR(TRIM(mes_ano),4,4))
+            WHEN LENGTH(TRIM(mes_ano)) = 7 AND SUBSTR(TRIM(mes_ano),5,1) = '-'
+              THEN CONCAT(SUBSTR(TRIM(mes_ano),6,2),'-',SUBSTR(TRIM(mes_ano),1,4))
+            ELSE TRIM(mes_ano)
+          END
+        ), 'dd-MM-yyyy'
+      ) AS mes_ano_ts,
+
+      ROW_NUMBER() OVER (
+        PARTITION BY
+          TRIM(CAST(numero_cliente AS STRING)),
+          TRIM(CAST(codigo AS STRING)),
+          TRIM(CAST(sub_codigo AS STRING)),
+          TRIM(CAST(forma AS STRING)),
+          CASE
+            WHEN LENGTH(TRIM(mes_ano)) = 7 AND SUBSTR(TRIM(mes_ano),3,1) IN ('-','/')
+              THEN CONCAT(SUBSTR(TRIM(mes_ano),1,2),'-',SUBSTR(TRIM(mes_ano),4,4))
+            WHEN LENGTH(TRIM(mes_ano)) = 7 AND SUBSTR(TRIM(mes_ano),5,1) = '-'
+              THEN CONCAT(SUBSTR(TRIM(mes_ano),6,2),'-',SUBSTR(TRIM(mes_ano),1,4))
+            ELSE TRIM(mes_ano)
+          END
+        ORDER BY mes_ano_ts DESC
+      ) AS rn
+    FROM dev_internal_anh_customer_profitability.tb_credit_notes_new
+  ) t
+  WHERE t.rn = 1
+) AS cnm
+  ON TRIM(f.xhcsno) = cnm.cliente_id
+ AND TRIM(f.xiprdc) = cnm.code
+ AND TRIM(f.xiprsc) = cnm.sub_code
+ AND TRIM(f.xifrmc) = cnm.form
+ AND cnm.mes_ano_norm = CONCAT(
+       LPAD(CAST(CAST(SUBSTR(f.fechaa,4,2) AS INT) AS STRING), 2, '0'), '-',  -- MM
+       CAST(CONCAT('20', SUBSTR(f.fechaa,2,2)) AS STRING)                      -- YYYY
+     )
+
+/* ===== CREDIT NOTES: fallback al ÚLTIMO registro disponible (sin mes) ===== */
+LEFT JOIN (
+  SELECT cliente_id, code, sub_code, form, rebate
+  FROM (
+    SELECT
+      TRIM(CAST(numero_cliente AS STRING)) AS cliente_id,
+      TRIM(CAST(codigo          AS STRING)) AS code,
+      TRIM(CAST(sub_codigo      AS STRING)) AS sub_code,
+      TRIM(CAST(forma           AS STRING)) AS form,
+      TRIM(rebate) AS rebate,
+
+      UNIX_TIMESTAMP(
+        CONCAT('01-',
+          CASE
+            WHEN LENGTH(TRIM(mes_ano)) = 7 AND SUBSTR(TRIM(mes_ano),3,1) IN ('-','/')
+              THEN CONCAT(SUBSTR(TRIM(mes_ano),1,2),'-',SUBSTR(TRIM(mes_ano),4,4))
+            WHEN LENGTH(TRIM(mes_ano)) = 7 AND SUBSTR(TRIM(mes_ano),5,1) = '-'
+              THEN CONCAT(SUBSTR(TRIM(mes_ano),6,2),'-',SUBSTR(TRIM(mes_ano),1,4))
+            ELSE TRIM(mes_ano)
+          END
+        ), 'dd-MM-yyyy'
+      ) AS mes_ano_ts,
+
+      ROW_NUMBER() OVER (
+        PARTITION BY
+          TRIM(CAST(numero_cliente AS STRING)),
+          TRIM(CAST(codigo AS STRING)),
+          TRIM(CAST(sub_codigo AS STRING)),
+          TRIM(CAST(forma AS STRING))
+        ORDER BY mes_ano_ts DESC
+      ) AS rn
+    FROM dev_internal_anh_customer_profitability.tb_credit_notes_new
+  ) t
+  WHERE t.rn = 1
+) AS cnl
+  ON TRIM(f.xhcsno) = cnl.cliente_id
+ AND TRIM(f.xiprdc) = cnl.code
+ AND TRIM(f.xiprsc) = cnl.sub_code
+ AND TRIM(f.xifrmc) = cnl.form
+
+WHERE f.fechaa >= '1230601'
+  AND FROM_UNIXTIME(
+        UNIX_TIMESTAMP(
+            CONCAT(
+                SUBSTR(f.fechaa, 6, 2), '/',
+                SUBSTR(f.fechaa, 4, 2), '/',
+                '20', SUBSTR(f.fechaa, 2, 2), ' ',
+                '00:00:00'),
+            'dd/MM/yyyy HH:mm:ss'))
+      <= (CASE 
+            WHEN CAST(DAY(NOW()) AS INT) > 9 
+              THEN LAST_DAY(ADD_MONTHS(NOW(),-1)) 
+              ELSE LAST_DAY(ADD_MONTHS(NOW(),-2)) 
+          END);
+
