@@ -244,12 +244,8 @@ SELECT
         cast(trim(f.cmcsnm) as string) as "Customer Name", 
         Customer.SEGMENTO2 as "Segment",
         cast(trim(f.k7a202) as string) as "customer_segment", 
-        /* NUEVO: clasificación rebate (mes + fallback) */
-        CASE 
-          WHEN cnm.rebate IS NOT NULL AND TRIM(cnm.rebate) <> '' THEN cnm.rebate
-          WHEN cnl.rebate IS NOT NULL AND TRIM(cnl.rebate) <> '' THEN cnl.rebate
-          ELSE 'NaN'
-        END AS "rebate",
+        /* NUEVO: clasificación de credit notes */
+        COALESCE(cn.rebate,'NaN') as "rebate",
         cast(trim(f.xiprdc) as string) as "Product Code", 
         cast(trim(f.xiprsc) as string) as "Sub Code", 
         cast(trim(f.xifrmc) as string) as "Form Code", 
@@ -462,67 +458,7 @@ LEFT JOIN
  and TRIM(f.xionum) = y.Od 
  and TRIM(f.xiloc2) = y.location_id
 
-/* ===================== CREDIT NOTES: match por MES ===================== */
-LEFT JOIN (
-  SELECT cliente_id, code, sub_code, form, mes_ano_norm, rebate
-  FROM (
-    SELECT
-      TRIM(CAST(numero_cliente AS STRING)) AS cliente_id,
-      TRIM(CAST(codigo          AS STRING)) AS code,
-      TRIM(CAST(sub_codigo      AS STRING)) AS sub_code,
-      TRIM(CAST(forma           AS STRING)) AS form,
-      TRIM(rebate) AS rebate,
-
-      /* Normaliza mes_ano a 'MM-YYYY' (acepta 'MM-YYYY', 'MM/YYYY' o 'YYYY-MM') */
-      CASE
-        WHEN LENGTH(TRIM(mes_ano)) = 7 AND SUBSTR(TRIM(mes_ano),3,1) IN ('-','/')
-          THEN CONCAT(SUBSTR(TRIM(mes_ano),1,2),'-',SUBSTR(TRIM(mes_ano),4,4))        -- MM-YYYY
-        WHEN LENGTH(TRIM(mes_ano)) = 7 AND SUBSTR(TRIM(mes_ano),5,1) = '-'
-          THEN CONCAT(SUBSTR(TRIM(mes_ano),6,2),'-',SUBSTR(TRIM(mes_ano),1,4))        -- YYYY-MM -> MM-YYYY
-        ELSE TRIM(mes_ano)
-      END AS mes_ano_norm,
-
-      UNIX_TIMESTAMP(
-        CONCAT('01-',
-          CASE
-            WHEN LENGTH(TRIM(mes_ano)) = 7 AND SUBSTR(TRIM(mes_ano),3,1) IN ('-','/')
-              THEN CONCAT(SUBSTR(TRIM(mes_ano),1,2),'-',SUBSTR(TRIM(mes_ano),4,4))
-            WHEN LENGTH(TRIM(mes_ano)) = 7 AND SUBSTR(TRIM(mes_ano),5,1) = '-'
-              THEN CONCAT(SUBSTR(TRIM(mes_ano),6,2),'-',SUBSTR(TRIM(mes_ano),1,4))
-            ELSE TRIM(mes_ano)
-          END
-        ), 'dd-MM-yyyy'
-      ) AS mes_ano_ts,
-
-      ROW_NUMBER() OVER (
-        PARTITION BY
-          TRIM(CAST(numero_cliente AS STRING)),
-          TRIM(CAST(codigo AS STRING)),
-          TRIM(CAST(sub_codigo AS STRING)),
-          TRIM(CAST(forma AS STRING)),
-          CASE
-            WHEN LENGTH(TRIM(mes_ano)) = 7 AND SUBSTR(TRIM(mes_ano),3,1) IN ('-','/')
-              THEN CONCAT(SUBSTR(TRIM(mes_ano),1,2),'-',SUBSTR(TRIM(mes_ano),4,4))
-            WHEN LENGTH(TRIM(mes_ano)) = 7 AND SUBSTR(TRIM(mes_ano),5,1) = '-'
-              THEN CONCAT(SUBSTR(TRIM(mes_ano),6,2),'-',SUBSTR(TRIM(mes_ano),1,4))
-            ELSE TRIM(mes_ano)
-          END
-        ORDER BY mes_ano_ts DESC
-      ) AS rn
-    FROM dev_internal_anh_customer_profitability.tb_credit_notes_new
-  ) t
-  WHERE t.rn = 1
-) AS cnm
-  ON TRIM(f.xhcsno) = cnm.cliente_id
- AND TRIM(f.xiprdc) = cnm.code
- AND TRIM(f.xiprsc) = cnm.sub_code
- AND TRIM(f.xifrmc) = cnm.form
- AND cnm.mes_ano_norm = CONCAT(
-       LPAD(CAST(CAST(SUBSTR(f.fechaa,4,2) AS INT) AS STRING), 2, '0'), '-',  -- MM
-       CAST(CONCAT('20', SUBSTR(f.fechaa,2,2)) AS STRING)                      -- YYYY
-     )
-
-/* ===== CREDIT NOTES: fallback al ÚLTIMO registro disponible (sin mes) ===== */
+/* ===================== CREDIT NOTES: último registro por cliente+producto(+sub+forma) ===================== */
 LEFT JOIN (
   SELECT cliente_id, code, sub_code, form, rebate
   FROM (
@@ -531,49 +467,41 @@ LEFT JOIN (
       TRIM(CAST(codigo          AS STRING)) AS code,
       TRIM(CAST(sub_codigo      AS STRING)) AS sub_code,
       TRIM(CAST(forma           AS STRING)) AS form,
-      TRIM(rebate) AS rebate,
-
-      UNIX_TIMESTAMP(
-        CONCAT('01-',
-          CASE
-            WHEN LENGTH(TRIM(mes_ano)) = 7 AND SUBSTR(TRIM(mes_ano),3,1) IN ('-','/')
-              THEN CONCAT(SUBSTR(TRIM(mes_ano),1,2),'-',SUBSTR(TRIM(mes_ano),4,4))
-            WHEN LENGTH(TRIM(mes_ano)) = 7 AND SUBSTR(TRIM(mes_ano),5,1) = '-'
-              THEN CONCAT(SUBSTR(TRIM(mes_ano),6,2),'-',SUBSTR(TRIM(mes_ano),1,4))
-            ELSE TRIM(mes_ano)
-          END
-        ), 'dd-MM-yyyy'
-      ) AS mes_ano_ts,
-
+      TRIM(CAST(rebate          AS STRING)) AS rebate,
       ROW_NUMBER() OVER (
-        PARTITION BY
+        PARTITION BY 
           TRIM(CAST(numero_cliente AS STRING)),
           TRIM(CAST(codigo AS STRING)),
           TRIM(CAST(sub_codigo AS STRING)),
           TRIM(CAST(forma AS STRING))
-        ORDER BY mes_ano_ts DESC
+        ORDER BY
+          UNIX_TIMESTAMP(
+            CASE
+              WHEN LENGTH(TRIM(mes_ano)) = 7 AND SUBSTR(TRIM(mes_ano),3,1) IN ('-','/')
+                THEN CONCAT('01-', SUBSTR(TRIM(mes_ano),1,2), '-', SUBSTR(TRIM(mes_ano),4,4))  -- MM-YYYY
+              WHEN LENGTH(TRIM(mes_ano)) = 7 AND SUBSTR(TRIM(mes_ano),5,1) = '-'               -- YYYY-MM
+                THEN CONCAT('01-', SUBSTR(TRIM(mes_ano),6,2), '-', SUBSTR(TRIM(mes_ano),1,4))
+              ELSE '01-01-1900'
+            END,
+            'dd-MM-yyyy'
+          ) DESC
       ) AS rn
     FROM dev_internal_anh_customer_profitability.tb_credit_notes_new
   ) t
-  WHERE t.rn = 1
-) AS cnl
-  ON TRIM(f.xhcsno) = cnl.cliente_id
- AND TRIM(f.xiprdc) = cnl.code
- AND TRIM(f.xiprsc) = cnl.sub_code
- AND TRIM(f.xifrmc) = cnl.form
+  WHERE rn = 1
+) AS cn
+  ON TRIM(CAST(f.xhcsno AS STRING)) = cn.cliente_id
+ AND TRIM(f.xiprdc) = cn.code
+ AND TRIM(f.xiprsc) = cn.sub_code
+ AND TRIM(f.xifrmc) = cn.form
 
 WHERE f.fechaa >= '1230601'
-  AND FROM_UNIXTIME(
-        UNIX_TIMESTAMP(
-            CONCAT(
-                SUBSTR(f.fechaa, 6, 2), '/',
-                SUBSTR(f.fechaa, 4, 2), '/',
-                '20', SUBSTR(f.fechaa, 2, 2), ' ',
-                '00:00:00'),
-            'dd/MM/yyyy HH:mm:ss'))
-      <= (CASE 
-            WHEN CAST(DAY(NOW()) AS INT) > 9 
-              THEN LAST_DAY(ADD_MONTHS(NOW(),-1)) 
-              ELSE LAST_DAY(ADD_MONTHS(NOW(),-2)) 
-          END);
-
+AND FROM_UNIXTIME(
+            UNIX_TIMESTAMP(
+                CONCAT(
+                    SUBSTR(f.fechaa, 6, 2), '/',
+                    SUBSTR(f.fechaa, 4, 2), '/',
+                        '20', SUBSTR(f.fechaa, 2, 2), ' ',
+                        '00:00:00'),
+                       'dd/MM/yyyy HH:mm:ss')) 
+    <= (case when cast(day(now()) as int) > 9 then last_day(add_months(now(),-1)) else last_day(add_months(now(),-2)) end);
