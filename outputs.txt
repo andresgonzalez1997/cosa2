@@ -244,7 +244,7 @@ SELECT
         Customer.SEGMENTO2 as "Segment",
         cast(trim(f.k7a202) as string) as "customer_segment", 
 
-        /* NUEVO: rebate por cliente + producto + sub + forma */
+        -- NUEVO: rebate como texto, sin funciones raras
         CASE 
           WHEN cn.rebate_flag = 2 THEN 'especial'
           WHEN cn.rebate_flag = 1 THEN 'generico'
