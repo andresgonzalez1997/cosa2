@@ -1,29 +1,31 @@
-
-// === NUEVO: normalizar llaves para el join con CN_Total_Specific_LineMonth ===
-#"Keys typed for CN join" =
-    Table.TransformColumnTypes(#"Changed Type19",{
-        {"customer number", Int64.Type},   // igual que cliente_id en la auxiliar
-        {"product code",   type text},
-        {"sub code",       type text},
-        {"form code",      type text},
-        {"month_year_nat", type text}
-    }),
-
-#"Keys cleaned for CN join" =
-    Table.TransformColumns(#"Keys typed for CN join",{
-        {"product code", each if _=null then "" else Text.Trim(Text.From(_)), type text},
-        {"sub code", each
-            let s  = if _=null then "" else Text.From(_),
-                s2 = Text.Lower(Text.Trim(s))
-            in  if s2="" or List.Contains({"nan","null","na"}, s2) then "" else Text.Trim(s)
-        , type text},
-        {"form code", each
-            let s  = if _=null then "" else Text.From(_),
-                s2 = Text.Lower(Text.Trim(s))
-            in  if s2="" or List.Contains({"nan","null","na"}, s2) then "" else Text.Trim(s)
-        , type text},
-        {"month_year_nat", each if _=null then "" else Text.Trim(Text.From(_)), type text}
-    });
+SELECT
+  CAST(NC.numero_cliente AS BIGINT)                    AS cliente_id,     -- <- entero para matchear con NIS
+  TRIM(CAST(NC.codigo AS STRING))                      AS code,
+  CASE
+    WHEN NC.sub_codigo IS NULL THEN ''
+    WHEN LOWER(TRIM(CAST(NC.sub_codigo AS STRING))) IN ('nan','null','na','-','.') THEN ''
+    ELSE TRIM(CAST(NC.sub_codigo AS STRING))
+  END                                                  AS sub_code,
+  CASE
+    WHEN NC.forma IS NULL THEN ''
+    WHEN LOWER(TRIM(CAST(NC.forma AS STRING))) IN ('nan','null','na','-','.') THEN ''
+    ELSE TRIM(CAST(NC.forma AS STRING))
+  END                                                  AS form,
+  CONCAT(CAST(MONTH(fecha_corregida) AS STRING),'_',CAST(YEAR(fecha_corregida) AS STRING)) AS mes_año,
+  SUM(CAST(NC.totaldesc AS DOUBLE))                    AS CN_Total_Discount
+FROM (
+  SELECT
+    numero_cliente, codigo, sub_codigo, forma, totaldesc, rebate,
+    FROM_UNIXTIME(
+      UNIX_TIMESTAMP(
+        CONCAT(SUBSTR(mes_ano,6,2),'/',SUBSTR(mes_ano,4,2),'/','20',SUBSTR(mes_ano,2,2),' 00:00:00'),
+        'dd/MM/yyyy HH:mm:ss'
+      )
+    ) AS fecha_corregida
+  FROM dev_internal_anh_customer_profitability.tb_credit_notes_new
+  WHERE UPPER(TRIM(rebate))='ESPECIFICO'
+) NC
+GROUP BY 1,2,3,4,5;
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////
