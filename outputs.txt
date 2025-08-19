@@ -1,156 +1,3 @@
-SELECT
-  CAST(NC.numero_cliente AS BIGINT)                    AS cliente_id,     -- <- entero para matchear con NIS
-  TRIM(CAST(NC.codigo AS STRING))                      AS code,
-  CASE
-    WHEN NC.sub_codigo IS NULL THEN ''
-    WHEN LOWER(TRIM(CAST(NC.sub_codigo AS STRING))) IN ('nan','null','na','-','.') THEN ''
-    ELSE TRIM(CAST(NC.sub_codigo AS STRING))
-  END                                                  AS sub_code,
-  CASE
-    WHEN NC.forma IS NULL THEN ''
-    WHEN LOWER(TRIM(CAST(NC.forma AS STRING))) IN ('nan','null','na','-','.') THEN ''
-    ELSE TRIM(CAST(NC.forma AS STRING))
-  END                                                  AS form,
-  CONCAT(CAST(MONTH(fecha_corregida) AS STRING),'_',CAST(YEAR(fecha_corregida) AS STRING)) AS mes_año,
-  SUM(CAST(NC.totaldesc AS DOUBLE))                    AS CN_Total_Discount
-FROM (
-  SELECT
-    numero_cliente, codigo, sub_codigo, forma, totaldesc, rebate,
-    FROM_UNIXTIME(
-      UNIX_TIMESTAMP(
-        CONCAT(SUBSTR(mes_ano,6,2),'/',SUBSTR(mes_ano,4,2),'/','20',SUBSTR(mes_ano,2,2),' 00:00:00'),
-        'dd/MM/yyyy HH:mm:ss'
-      )
-    ) AS fecha_corregida
-  FROM dev_internal_anh_customer_profitability.tb_credit_notes_new
-  WHERE UPPER(TRIM(rebate))='ESPECIFICO'
-) NC
-GROUP BY 1,2,3,4,5;
-
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////Main Fact Cred Notes Holding Month/////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
-let
-    Source = Odbc.Query("host=Drona-impala.cargill.com;port=21050;driver={Cloudera ODBC Driver for Impala};usesystemtruststore=1;ssl=1;checkcertrevocation=0;authmech=1;usenativequery=1", "select NC_Consol.numero_cliente as numero_cliente,#(lf)       concat(cast(month(NC_CONSOL.fecha_corregida)as string),""_"",cast(year(NC_CONSOL.fecha_corregida)as string)) as Mes_Año,#(lf)       NC_Consol.rebate,#(lf)       NC_CONSOL.codigo,#(lf)       sum(NC_CONSOL.nc_total*1) as Desc_Total#(lf)--Calcular el total de rebate tipo 1 a Total Rebate = Total Descuentos (Columna AH  del archivo credit notes)--#(lf)from#(lf)(select NC.numero_cliente, #(lf)        NC.rebate,#(lf)        NC.codigo,#(lf)        FROM_UNIXTIME(#(lf)           UNIX_TIMESTAMP(#(lf)               CONCAT(#(lf)                   SUBSTR(mes_ano, 6, 2), '/',#(lf)                   SUBSTR(mes_ano, 4, 2), '/',#(lf)                   '20', SUBSTR(mes_ano, 2, 2), ' ',#(lf)                   '00:00:00'#(lf)               ),#(lf)               'dd/MM/yyyy HH:mm:ss'#(lf)           )#(lf)           ) AS fecha_corregida,#(lf)          sum(cast(NC.totaldesc as double)) as NC_total#(lf)from dev_internal_anh_customer_profitability.tb_credit_notes_new as NC#(lf)group by 1,2,3,4) as NC_Consol#(lf)group by 1,2,3,4;"),
-    #"Changed Type1" = Table.TransformColumnTypes(Source,{{"desc_total", type text}}),
-    #"Filtered Rows" = Table.SelectRows(#"Changed Type1", each ([rebate] = "GENERICO")),
-    #"Replaced Value2" = Table.ReplaceValue(#"Filtered Rows","NaN","0",Replacer.ReplaceText,{"desc_total"}),
-    #"Replaced Value" = Table.ReplaceValue(#"Replaced Value2","NaN","0",Replacer.ReplaceText,{"numero_cliente"}),
-    #"Changed Type" = Table.TransformColumnTypes(#"Replaced Value",{{"numero_cliente", Int64.Type}, {"desc_total", type number}}),
-    #"Merged Queries" = Table.NestedJoin(#"Changed Type", {"numero_cliente"}, Clientes, {"codigo"}, "Main_Customer", JoinKind.LeftOuter),
-    #"Expanded Main_Customer" = Table.ExpandTableColumn(#"Merged Queries", "Main_Customer", {"holding_group_of"}, {"Main_Customer.holding_group_of"}),
-    #"Grouped Rows" = Table.Group(#"Expanded Main_Customer", {"mes_año", "Main_Customer.holding_group_of", "rebate"}, {{"Desc_Total", each List.Sum([desc_total]), type nullable number}}),
-    #"Replaced Value1" = Table.ReplaceValue(#"Grouped Rows",null,"0",Replacer.ReplaceValue,{"Main_Customer.holding_group_of"}),
-    #"Filtered Rows1" = Table.SelectRows(#"Replaced Value1", each ([Main_Customer.holding_group_of] = "NATURISA"))
-in
-    #"Filtered Rows1"
-
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////Main Fact Cred Notes Customer Month Holding///////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
-let
-    Source = Odbc.Query("host=Drona-impala.cargill.com;port=21050;driver={Cloudera ODBC Driver for Impala};usesystemtruststore=1;ssl=1;checkcertrevocation=0;authmech=1;usenativequery=1", "select NC_Consol.numero_cliente as numero_cliente,#(lf)        concat(cast(month(NC_CONSOL.fecha_corregida)as string),""_"",cast(year(NC_CONSOL.fecha_corregida)as string)) as Mes_Año,#(lf)        NC_Consol.rebate,#(lf)        sum(NC_CONSOL.nc_total*1) as Desc_Total#(lf)--Calcular el total de rebate tipo 1 a Total Rebate = Total Descuentos (Columna AH  del archivo credit notes)--#(lf)from#(lf)(select NC.numero_cliente,#(lf)        NC.rebate, #(lf)        FROM_UNIXTIME(#(lf)           UNIX_TIMESTAMP(#(lf)               CONCAT(#(lf)                   SUBSTR(mes_ano, 6, 2), '/',#(lf)                   SUBSTR(mes_ano, 4, 2), '/',#(lf)                   '20', SUBSTR(mes_ano, 2, 2), ' ',#(lf)                   '00:00:00'#(lf)               ),#(lf)               'dd/MM/yyyy HH:mm:ss'#(lf)           )#(lf)           ) AS fecha_corregida,#(lf)          sum(cast(NC.totaldesc as double)) as NC_total#(lf)from dev_internal_anh_customer_profitability.tb_credit_notes_new as NC#(lf)group by 1,2,3) as NC_Consol#(lf)group by 1,2,3;"),
-    #"Changed Type1" = Table.TransformColumnTypes(Source,{{"desc_total", type text}}),
-    #"Replaced Value2" = Table.ReplaceValue(#"Changed Type1","NaN","0",Replacer.ReplaceText,{"desc_total"}),
-    #"Replaced Value" = Table.ReplaceValue(#"Replaced Value2","NaN","0",Replacer.ReplaceText,{"numero_cliente"}),
-    #"Changed Type" = Table.TransformColumnTypes(#"Replaced Value",{{"numero_cliente", Int64.Type}, {"desc_total", type number}}),
-    #"Merged Queries" = Table.NestedJoin(#"Changed Type", {"numero_cliente"}, Clientes, {"codigo"}, "Main_Customer", JoinKind.LeftOuter),
-    #"Expanded Main_Customer" = Table.ExpandTableColumn(#"Merged Queries", "Main_Customer", {"holding_group_of"}, {"Main_Customer.holding_group_of"})
-in
-    #"Expanded Main_Customer"
-
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////Main Fact Cred Notes Holding Month subcode///////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
-let
-    Source = Odbc.Query("host=Drona-impala.cargill.com;port=21050;driver={Cloudera ODBC Driver for Impala};usesystemtruststore=1;ssl=1;checkcertrevocation=0;authmech=1;usenativequery=1", "select NC_Consol.numero_cliente as numero_cliente,#(lf)        NC_Consol.codigo_sub,#(lf)        NC_Consol.rebate,  #(lf)        concat(cast(month(NC_CONSOL.fecha_corregida)as string),""_"",cast(year(NC_CONSOL.fecha_corregida)as string)) as Mes_Año,#(lf)        sum(NC_CONSOL.nc_total*1) as Desc_Total#(lf)--Calcular el total de rebate tipo 1 a Total Rebate = Total Descuentos (Columna AH  del archivo credit notes)--#(lf)from#(lf)(select NC.numero_cliente,#(lf)        CASE  when nc.sub_codigo = ""NaN"" then concat(cast(nc.codigo as string),""_"")#(lf)        else concat(cast(nc.codigo as string),""_"",cast(nc.sub_codigo as string)) end CODIGO_SUB,#(lf)        NC.rebate,#(lf)        FROM_UNIXTIME(#(lf)           UNIX_TIMESTAMP(#(lf)               CONCAT(#(lf)                   SUBSTR(mes_ano, 6, 2), '/',#(lf)                   SUBSTR(mes_ano, 4, 2), '/',#(lf)                   '20', SUBSTR(mes_ano, 2, 2), ' ',#(lf)                   '00:00:00'#(lf)               ),#(lf)               'dd/MM/yyyy HH:mm:ss'#(lf)           )#(lf)           ) AS fecha_corregida,#(lf)          sum(cast(NC.totaldesc as double)) as NC_total#(lf)from dev_internal_anh_customer_profitability.tb_credit_notes_new as NC#(lf)group by 1,2,3,4) as NC_Consol#(lf)group by 1,2,3,4"),
-    #"Replaced Value" = Table.ReplaceValue(Source,"NaN","0",Replacer.ReplaceText,{"numero_cliente"}),
-    #"Changed Type1" = Table.TransformColumnTypes(#"Replaced Value",{{"desc_total", type text}}),
-    #"Replaced Value1" = Table.ReplaceValue(#"Changed Type1","NaN","0",Replacer.ReplaceText,{"desc_total"}),
-    #"Replaced Value2" = Table.ReplaceValue(#"Replaced Value1","Error","0",Replacer.ReplaceText,{"desc_total"}),
-    #"Changed Type" = Table.TransformColumnTypes(#"Replaced Value2",{{"numero_cliente", Int64.Type}, {"desc_total", type number}}),
-    #"Filtered Rows1" = Table.SelectRows(#"Changed Type", each true),
-    #"Merged Queries" = Table.NestedJoin(#"Filtered Rows1", {"numero_cliente"}, Clientes, {"codigo"}, "Main_Customer", JoinKind.LeftOuter),
-    #"Expanded Main_Customer" = Table.ExpandTableColumn(#"Merged Queries", "Main_Customer", {"holding_group_of"}, {"holding_group_of"}),
-    #"Replaced Value3" = Table.ReplaceValue(#"Expanded Main_Customer",null,"0",Replacer.ReplaceValue,{"holding_group_of"}),
-    #"Grouped Rows" = Table.Group(#"Replaced Value3", {"codigo_sub", "mes_año", "holding_group_of", "rebate"}, {{"Desc_Total", each List.Sum([desc_total]), type nullable number}})
-in
-    #"Grouped Rows"
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////Discounts Naturisa//////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
-let
-    Source = Odbc.Query("host=Drona-impala.cargill.com;port=21050;driver={Cloudera ODBC Driver for Impala};usesystemtruststore=1;ssl=1;checkcertrevocation=0;authmech=1;usenativequery=1", "Select#(lf)    Customer.Holding_Group_Of as 'GROUP', #(lf)    nis.year_month as Year_Month_Nat,#(lf)    sum(nis.total_shipped) as Total_Shipped,#(lf)    sum(nis.total_sales) as Total_Sales#(lf)from #(lf)(SELECT #(lf)           f.fechaa, #(lf)           f.xhcsno as Cliente,#(lf)           case  when #(lf)           SUBSTR(fechaa, 4, 1) = '0'#(lf)           THEN Concat(SUBSTR(fechaa, 5, 1),'_','20', SUBSTR(fechaa, 2, 2))#(lf)           else Concat(SUBSTR(fechaa, 4, 2),'_','20', SUBSTR(fechaa, 2, 2)) end 'year_month',#(lf)           (sum(cast(f.xiqtsh as DOUBLE))*min(cast(f.cnusiz as double)))/1000 as 'total_shipped',#(lf)           (sum(cast(f.xieprc as DOUBLE))-(sum(cast(f.xdescd as double)+cast(f.xdesch as double) + cast(f.xdescp as double))))/1000 as 'total_sales'#(lf)FROM dev_internal_anh_customer_profitability.nis_filtered_segments_vw as f#(lf)where f.fechaa >= '1230601'#(lf)and FROM_UNIXTIME(#(lf)            UNIX_TIMESTAMP(#(lf)                CONCAT(#(lf)                    SUBSTR(f.fechaa, 6, 2), '/',#(lf)                    SUBSTR(f.fechaa, 4, 2), '/',#(lf)                        '20', SUBSTR(f.fechaa, 2, 2), ' ',#(lf)                        '00:00:00'),#(lf)                       'dd/MM/yyyy HH:mm:ss')) <= (case when cast(day(now()) as int) > 9 then last_day(add_months(now(),-1)) else last_day(add_months(now(),-2)) end)#(lf)group by 1,2,3) as Nis#(lf)#(lf)left join #(lf)#(lf)(select NEW_CUSTOMER.Codigo AS Codigo,#(lf)        trim(NEW_CUSTOMER.SEGMENTO_2) as SEGMENTO2,#(lf)        trim(NEW_CUSTOMER.grupo_holding) as Holding_Group_Of#(lf)from#(lf)(SELECT t.*,#(lf)        case when t.responsable = ""FINANZAS"" then ""Finanzas"" #(lf)         when t.responsable = ""ADMINISTRACION"" then ""Adm.""#(lf)         when t.responsable = ""SERVICIOS GENERALES"" then ""Servicios Generales""#(lf)         when t.responsable = ""RMS"" then ""RMS""#(lf)         when t.responsable = ""LOGISTICA"" then ""Logistica""#(lf)         when t.responsable = t.estructura and length(t.responsable) > 3 then t.estructura#(lf)         when t.Segmentation_Cargill_Segment = ""KOBE - STRATEGIC"" then ""Kobe Strategic"" #(lf)         when t.Segmentation_Cargill_Segment = ""NOAH - CLASSIC"" then  ""Noah Classic""#(lf)         when t.Segmentation_Cargill_Segment = ""NOAH - BASE"" then ""Noah Base"" #(lf)         when t.Segmentation_Cargill_Segment = ""NOAH - STRATEGIC"" then ""Noah Strategic""#(lf)         when t.Segmentation_Cargill_Segment = ""KOBE - CLASSIC"" then ""Kobe Classic""#(lf)         when t.Segmentation_Cargill_Segment = ""DENNIS"" then ""Dennis""#(lf)         when TRIM(t.Segmentation_Cargill_Segment) is null then 'Noah Base'#(lf)         else ""FALTA"" END SEGMENTO_2#(lf)         --=+IFERROR(IF(G2=""FINANZAS"",""Finanzas"",IF(G2=""ADMINISTRACION"",""Adm."",IF(G2=""SERVICIOS GENERALES"",""Servicios Generales"",IF(G2=""RMS"",""RMS"",IF(G2=""LOGISTICA"",""Logistica"",IF(G2=$H$2,$H$2, IF(N2=""KOBE - STRATEGIC"",""Kobe Strategic"",#(lf)         --IF(N2=""NOAH - CLASSIC"",""Noah Classic"",IF(N2=""NOAH - BASE"",""Noah Base"",IF(N2=""NOAH - STRATEGIC"",""Noah Strategic"",IF(N2=""KOBE - CLASSIC"",""Kobe Classic"", IF(N2=""DENNIS"",""Dennis"",""FALTA"")))))))))))),""Noah Base"")--#(lf)from (SELECT #(lf)    l.*,#(lf)    ec.grupo_holding as Segmentation_Holding,#(lf)    ec.group_id as Segmentation_Group,#(lf)    ec.cargill_segment as Segmentation_Cargill_Segment#(lf)FROM dev_internal_anh_customer_profitability.tb_listado_codigo_clientes_new l#(lf)LEFT JOIN dev_internal_anh_customer_profitability.tb_ec_customer_segmentation ec #(lf)ON l.group_id = ec.group_id) as T) as NEW_CUSTOMER group by 1,2,3) as Customer#(lf)#(lf)on Nis.cliente = CUSTOMER.Codigo#(lf)where Customer.Holding_Group_Of = 'NATURISA'#(lf)GROUP BY 1,2#(lf)#(lf);"),
-    #"Merged Queries1" = Table.NestedJoin(Source, {"year_month_nat", "group"}, #"Main_Fact_Cred_Notes Holding_Month", {"mes_año", "Main_Customer.holding_group_of"}, "Main_Fact_Cred_Notes Customer_Month_Holding", JoinKind.LeftOuter),
-    #"Expanded Main_Fact_Cred_Notes Customer_Month_Holding" = Table.ExpandTableColumn(#"Merged Queries1", "Main_Fact_Cred_Notes Customer_Month_Holding", {"rebate", "Desc_Total"}, {"Main_Fact_Cred_Notes Customer_Month_Holding.rebate", "Main_Fact_Cred_Notes Customer_Month_Holding.Desc_Total"}),
-    #"Changed Type2" = Table.TransformColumnTypes(#"Expanded Main_Fact_Cred_Notes Customer_Month_Holding",{{"Main_Fact_Cred_Notes Customer_Month_Holding.Desc_Total", type text}}),
-    #"Replaced Value" = Table.ReplaceValue(#"Changed Type2",null,"0",Replacer.ReplaceValue,{"Main_Fact_Cred_Notes Customer_Month_Holding.Desc_Total"}),
-    #"Changed Type4" = Table.TransformColumnTypes(#"Replaced Value",{{"Main_Fact_Cred_Notes Customer_Month_Holding.Desc_Total", type number}}),
-    #"Renamed Columns2" = Table.RenameColumns(#"Changed Type4",{{"Main_Fact_Cred_Notes Customer_Month_Holding.Desc_Total", "Desc_Total"}}),
-    #"Added Custom12" = Table.AddColumn(#"Renamed Columns2", "Custom", each ([Desc_Total]/1000)/[total_sales]),
-    #"Renamed Columns4" = Table.RenameColumns(#"Added Custom12",{{"Custom", "% Desc_Naturisa"}}),
-    #"Changed Type5" = Table.TransformColumnTypes(#"Renamed Columns4",{{"% Desc_Naturisa", Percentage.Type}}),
-    #"Renamed Columns" = Table.RenameColumns(#"Changed Type5",{{"Main_Fact_Cred_Notes Customer_Month_Holding.rebate", "rebate"}})
-in
-    #"Renamed Columns"
-
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////DiscountsCustomer Month/////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
-let
-    Source = Odbc.Query("host=Drona-impala.cargill.com;port=21050;driver={Cloudera ODBC Driver for Impala};usesystemtruststore=1;ssl=1;checkcertrevocation=0;authmech=1;usenativequery=1", "Select#(lf)    nis.Cliente as 'Customer Number', #(lf)    Customer.Holding_Group_Of as 'GROUP2',#(lf)    nis.year_month,#(lf)    sum(nis.total_shipped) as Total_Shipped,#(lf)    sum(nis.total_sales) as Total_Sales#(lf)from #(lf)(SELECT #(lf)           f.fechaa, #(lf)           f.xhcsno as Cliente,#(lf)           case  when #(lf)           SUBSTR(fechaa, 4, 1) = '0'#(lf)           THEN Concat(SUBSTR(fechaa, 5, 1),'_','20', SUBSTR(fechaa, 2, 2))#(lf)           else Concat(SUBSTR(fechaa, 4, 2),'_','20', SUBSTR(fechaa, 2, 2)) end 'year_month',#(lf)           (sum(cast(f.xiqtsh as DOUBLE))*min(cast(f.cnusiz as double)))/1000 as 'total_shipped',#(lf)           (sum(cast(f.xieprc as DOUBLE))-(sum(cast(f.xdescd as double)+cast(f.xdesch as double) + cast(f.xdescp as double))))/1000 as 'total_sales'#(lf)FROM dev_internal_anh_customer_profitability.nis_filtered_segments_vw as f#(lf)where f.fechaa >= '1230601'#(lf)and FROM_UNIXTIME(#(lf)            UNIX_TIMESTAMP(#(lf)                CONCAT(#(lf)                    SUBSTR(f.fechaa, 6, 2), '/',#(lf)                    SUBSTR(f.fechaa, 4, 2), '/',#(lf)                        '20', SUBSTR(f.fechaa, 2, 2), ' ',#(lf)                        '00:00:00'),#(lf)                       'dd/MM/yyyy HH:mm:ss')) <= (case when cast(day(now()) as int) > 9 then last_day(add_months(now(),-1)) else last_day(add_months(now(),-2)) end)#(lf)group by 1,2,3) as Nis#(lf)#(lf)left join #(lf)#(lf)(select NEW_CUSTOMER.Codigo AS Codigo,#(lf)        trim(NEW_CUSTOMER.SEGMENTO_2) as SEGMENTO2,#(lf)        trim(NEW_CUSTOMER.grupo_holding) as Holding_Group_Of#(lf)from#(lf)(SELECT t.*,#(lf)        case when t.responsable = ""FINANZAS"" then ""Finanzas"" #(lf)         when t.responsable = ""ADMINISTRACION"" then ""Adm.""#(lf)         when t.responsable = ""SERVICIOS GENERALES"" then ""Servicios Generales""#(lf)         when t.responsable = ""RMS"" then ""RMS""#(lf)         when t.responsable = ""LOGISTICA"" then ""Logistica""#(lf)         when t.responsable = t.estructura and length(t.responsable) > 3 then t.estructura#(lf)         when t.Segmentation_Cargill_Segment = ""KOBE - STRATEGIC"" then ""Kobe Strategic"" #(lf)         when t.Segmentation_Cargill_Segment = ""NOAH - CLASSIC"" then  ""Noah Classic""#(lf)         when t.Segmentation_Cargill_Segment = ""NOAH - BASE"" then ""Noah Base"" #(lf)         when t.Segmentation_Cargill_Segment = ""NOAH - STRATEGIC"" then ""Noah Strategic""#(lf)         when t.Segmentation_Cargill_Segment = ""KOBE - CLASSIC"" then ""Kobe Classic""#(lf)         when t.Segmentation_Cargill_Segment = ""DENNIS"" then ""Dennis""#(lf)         when TRIM(t.Segmentation_Cargill_Segment) is null then 'Noah Base'#(lf)         else ""FALTA"" END SEGMENTO_2#(lf)         --=+IFERROR(IF(G2=""FINANZAS"",""Finanzas"",IF(G2=""ADMINISTRACION"",""Adm."",IF(G2=""SERVICIOS GENERALES"",""Servicios Generales"",IF(G2=""RMS"",""RMS"",IF(G2=""LOGISTICA"",""Logistica"",IF(G2=$H$2,$H$2, IF(N2=""KOBE - STRATEGIC"",""Kobe Strategic"",#(lf)         --IF(N2=""NOAH - CLASSIC"",""Noah Classic"",IF(N2=""NOAH - BASE"",""Noah Base"",IF(N2=""NOAH - STRATEGIC"",""Noah Strategic"",IF(N2=""KOBE - CLASSIC"",""Kobe Classic"", IF(N2=""DENNIS"",""Dennis"",""FALTA"")))))))))))),""Noah Base"")--#(lf)from (SELECT #(lf)    l.*,#(lf)    ec.grupo_holding as Segmentation_Holding,#(lf)    ec.group_id as Segmentation_Group,#(lf)    ec.cargill_segment as Segmentation_Cargill_Segment#(lf)FROM dev_internal_anh_customer_profitability.tb_listado_codigo_clientes_new l#(lf)LEFT JOIN dev_internal_anh_customer_profitability.tb_ec_customer_segmentation ec #(lf)ON l.group_id = ec.group_id) as T) as NEW_CUSTOMER group by 1,2,3) as Customer#(lf)#(lf)on Nis.cliente = CUSTOMER.Codigo#(lf)GROUP BY 1,2,3#(lf)#(lf);"),
-    #"Renamed Columns4" = Table.RenameColumns(Source,{{"group2", "GROUP"}, {"customer number", "Customer Number"}, {"year_month", "year_month_nat"}}),
-    #"Changed Type" = Table.TransformColumnTypes(#"Renamed Columns4",{{"Customer Number", Int64.Type}}),
-    #"Merged Queries1" = Table.NestedJoin(#"Changed Type", {"Customer Number", "year_month_nat"}, #"Main_Fact_Cred_Notes Customer_Month_Holding", {"numero_cliente", "mes_año"}, "Main_Fact_Cred_Notes - No Usar", JoinKind.LeftOuter),
-    #"Expanded Main_Fact_Cred_Notes - No Usar" = Table.ExpandTableColumn(#"Merged Queries1", "Main_Fact_Cred_Notes - No Usar", {"numero_cliente", "mes_año", "rebate", "desc_total"}, {"Main_Fact_Cred_Notes - No Usar.numero_cliente", "Main_Fact_Cred_Notes - No Usar.mes_año", "Main_Fact_Cred_Notes - No Usar.rebate", "Main_Fact_Cred_Notes - No Usar.desc_total"}),
-    #"Removed Columns" = Table.RemoveColumns(#"Expanded Main_Fact_Cred_Notes - No Usar",{"Main_Fact_Cred_Notes - No Usar.numero_cliente", "Main_Fact_Cred_Notes - No Usar.mes_año"}),
-    #"Replaced Value" = Table.ReplaceValue(#"Removed Columns",null,0,Replacer.ReplaceValue,{"Main_Fact_Cred_Notes - No Usar.desc_total"}),
-    #"Renamed Columns2" = Table.RenameColumns(#"Replaced Value",{{"Main_Fact_Cred_Notes - No Usar.desc_total", "Desc_Total"}}),
-    #"Added Custom12" = Table.AddColumn(#"Renamed Columns2", "% Desc (OTROS)", each ([Desc_Total]/1000)/[total_sales]),
-    #"Changed Type4" = Table.TransformColumnTypes(#"Added Custom12",{{"% Desc (OTROS)", type text}}),
-    #"Replaced Value2" = Table.ReplaceValue(#"Changed Type4","Error","0",Replacer.ReplaceText,{"% Desc (OTROS)"}),
-    #"Replaced Value1" = Table.ReplaceValue(#"Replaced Value2","NaN","0",Replacer.ReplaceText,{"% Desc (OTROS)"}),
-    #"Changed Type5" = Table.TransformColumnTypes(#"Replaced Value1",{{"% Desc (OTROS)", Percentage.Type}}),
-    #"Changed Type2" = Table.TransformColumnTypes(#"Changed Type5",{{"% Desc (OTROS)", Percentage.Type}}),
-    #"Filtered Rows" = Table.SelectRows(#"Changed Type2", each ([GROUP] <> "BENITO SANTOS" and [GROUP] <> "GILCAM" and [GROUP] <> "HENGXIN" and [GROUP] <> "NATURISA" and [GROUP] <> "PINO" and [GROUP] <> "ZHU HENGPENG")),
-    #"Renamed Columns" = Table.RenameColumns(#"Filtered Rows",{{"Main_Fact_Cred_Notes - No Usar.rebate", "rebate"}})
-in
-    #"Renamed Columns"
-
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////Discounts Especiales////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
-let
-    Source = Odbc.Query("host=Drona-impala.cargill.com;port=21050;driver={Cloudera ODBC Driver for Impala};usesystemtruststore=1;ssl=1;checkcertrevocation=0;authmech=1;usenativequery=1", "Select#(lf)    nis.Cliente as 'Customer_Number', #(lf)    Customer.Holding_Group_Of as 'GROUP2',#(lf)    nis.year_month as 'year_month_Nat',#(lf)    nis.CodeSubcode as 'Codesub',#(lf)    sum(nis.total_shipped) as Total_Shipped,#(lf)    sum(nis.total_sales) as Total_Sales#(lf)from #(lf)(SELECT #(lf)           f.fechaa, #(lf)           f.xhcsno as Cliente,#(lf)           concat(trim(f.xiprdc),'_',trim(f.xiprsc)) as ""CodeSubcode"",#(lf)           case  when #(lf)           SUBSTR(fechaa, 4, 1) = '0'#(lf)           THEN Concat(SUBSTR(fechaa, 5, 1),'_','20', SUBSTR(fechaa, 2, 2))#(lf)           else Concat(SUBSTR(fechaa, 4, 2),'_','20', SUBSTR(fechaa, 2, 2)) end 'year_month',#(lf)           (sum(cast(f.xiqtsh as DOUBLE))*min(cast(f.cnusiz as double)))/1000 as 'total_shipped',#(lf)           (sum(cast(f.xieprc as DOUBLE))-(sum(cast(f.xdescd as double)+cast(f.xdesch as double) + cast(f.xdescp as double))))/1000 as 'total_sales'#(lf)FROM dev_internal_anh_customer_profitability.nis_filtered_segments_vw as f#(lf)where f.fechaa >= '1230601'#(lf)and #(lf)FROM_UNIXTIME(#(lf)            UNIX_TIMESTAMP(#(lf)                CONCAT(#(lf)                    SUBSTR(f.fechaa, 6, 2), '/',#(lf)                    SUBSTR(f.fechaa, 4, 2), '/',#(lf)                        '20', SUBSTR(f.fechaa, 2, 2), ' ',#(lf)                        '00:00:00'),#(lf)                       'dd/MM/yyyy HH:mm:ss')) <= (case when cast(day(now()) as int) > 9 then last_day(add_months(now(),-1)) else last_day(add_months(now(),-2)) end)#(lf)group by 1,2,3,4) as Nis#(lf)#(lf)left join #(lf)#(lf)(select NEW_CUSTOMER.Codigo AS Codigo,#(lf)        trim(NEW_CUSTOMER.SEGMENTO_2) as SEGMENTO2,#(lf)        trim(NEW_CUSTOMER.grupo_holding) as Holding_Group_Of#(lf)from#(lf)(SELECT t.*,#(lf)        case when t.responsable = ""FINANZAS"" then ""Finanzas"" #(lf)         when t.responsable = ""ADMINISTRACION"" then ""Adm.""#(lf)         when t.responsable = ""SERVICIOS GENERALES"" then ""Servicios Generales""#(lf)         when t.responsable = ""RMS"" then ""RMS""#(lf)         when t.responsable = ""LOGISTICA"" then ""Logistica""#(lf)         when t.responsable = t.estructura and length(t.responsable) > 3 then t.estructura#(lf)         when t.Segmentation_Cargill_Segment = ""KOBE - STRATEGIC"" then ""Kobe Strategic"" #(lf)         when t.Segmentation_Cargill_Segment = ""NOAH - CLASSIC"" then  ""Noah Classic""#(lf)         when t.Segmentation_Cargill_Segment = ""NOAH - BASE"" then ""Noah Base"" #(lf)         when t.Segmentation_Cargill_Segment = ""NOAH - STRATEGIC"" then ""Noah Strategic""#(lf)         when t.Segmentation_Cargill_Segment = ""KOBE - CLASSIC"" then ""Kobe Classic""#(lf)         when t.Segmentation_Cargill_Segment = ""DENNIS"" then ""Dennis""#(lf)         when TRIM(t.Segmentation_Cargill_Segment) is null then 'Noah Base'#(lf)         else ""FALTA"" END SEGMENTO_2#(lf)         --=+IFERROR(IF(G2=""FINANZAS"",""Finanzas"",IF(G2=""ADMINISTRACION"",""Adm."",IF(G2=""SERVICIOS GENERALES"",""Servicios Generales"",IF(G2=""RMS"",""RMS"",IF(G2=""LOGISTICA"",""Logistica"",IF(G2=$H$2,$H$2, IF(N2=""KOBE - STRATEGIC"",""Kobe Strategic"",#(lf)         --IF(N2=""NOAH - CLASSIC"",""Noah Classic"",IF(N2=""NOAH - BASE"",""Noah Base"",IF(N2=""NOAH - STRATEGIC"",""Noah Strategic"",IF(N2=""KOBE - CLASSIC"",""Kobe Classic"", IF(N2=""DENNIS"",""Dennis"",""FALTA"")))))))))))),""Noah Base"")--#(lf)from (SELECT #(lf)    l.*,#(lf)    ec.grupo_holding as Segmentation_Holding,#(lf)    ec.group_id as Segmentation_Group,#(lf)    ec.cargill_segment as Segmentation_Cargill_Segment#(lf)FROM dev_internal_anh_customer_profitability.tb_listado_codigo_clientes l#(lf)LEFT JOIN dev_internal_anh_customer_profitability.tb_ec_customer_segmentation ec #(lf)ON l.group_id = ec.group_id) as T) as NEW_CUSTOMER group by 1,2,3) as Customer#(lf)#(lf)on Nis.cliente = CUSTOMER.Codigo#(lf)GROUP BY 1,2,3,4#(lf);"),
-    #"Changed Type9" = Table.TransformColumnTypes(Source,{{"customer_number", Int64.Type}}),
-    #"Renamed Columns5" = Table.RenameColumns(#"Changed Type9",{{"group2", "GROUP"}, {"customer_number", "Customer Number"}, {"year_month_nat", "year_month_nat"}, {"codesub", "Sku_code_subcode"}}),
-    #"Filtered Rows" = Table.SelectRows(#"Renamed Columns5", each ([GROUP] = "BENITO SANTOS" or [GROUP] = "GILCAM" or [GROUP] = "HENGXIN" or [GROUP] = "PINO" or [GROUP] = "ZHU HENGPENG")),
-    #"Sorted Rows" = Table.Sort(#"Filtered Rows",{{"GROUP", Order.Ascending}}),
-    #"Merged Queries1" = Table.NestedJoin(#"Sorted Rows", {"year_month_nat", "Sku_code_subcode", "GROUP"}, #"Main_Fact_Cred_Notes Holding_Month_SKU_subcode", {"mes_año", "codigo_sub", "holding_group_of"}, "Main_Fact_Cred_Notes Holding_Month_SKU_subcode", JoinKind.LeftOuter),
-    #"Expanded Main_Fact_Cred_Notes Holding_Month_SKU_subcode" = Table.ExpandTableColumn(#"Merged Queries1", "Main_Fact_Cred_Notes Holding_Month_SKU_subcode", {"rebate", "Desc_Total"}, {"Main_Fact_Cred_Notes Holding_Month_SKU_subcode.rebate", "Main_Fact_Cred_Notes Holding_Month_SKU_subcode.Desc_Total"}),
-    #"Changed Type2" = Table.TransformColumnTypes(#"Expanded Main_Fact_Cred_Notes Holding_Month_SKU_subcode",{{"Main_Fact_Cred_Notes Holding_Month_SKU_subcode.Desc_Total", type text}}),
-    #"Replaced Value" = Table.ReplaceValue(#"Changed Type2",null,"0",Replacer.ReplaceValue,{"Main_Fact_Cred_Notes Holding_Month_SKU_subcode.Desc_Total"}),
-    #"Changed Type4" = Table.TransformColumnTypes(#"Replaced Value",{{"Main_Fact_Cred_Notes Holding_Month_SKU_subcode.Desc_Total", type number}}),
-    #"Renamed Columns2" = Table.RenameColumns(#"Changed Type4",{{"Main_Fact_Cred_Notes Holding_Month_SKU_subcode.Desc_Total", "Desc_Total (Especiales)"}}),
-    #"Added Custom15" = Table.AddColumn(#"Renamed Columns2", "Custom", each [#"Desc_Total (Especiales)"]/[total_shipped]),
-    #"Renamed Columns4" = Table.RenameColumns(#"Added Custom15",{{"Custom", "% Desc_Esp_Shipped"}}),
-    #"Changed Type5" = Table.TransformColumnTypes(#"Renamed Columns4",{{"% Desc_Esp_Shipped", type text}}),
-    #"Replaced Value1" = Table.ReplaceValue(#"Changed Type5","NaN","0",Replacer.ReplaceText,{"% Desc_Esp_Shipped"}),
-    #"Changed Type6" = Table.TransformColumnTypes(#"Replaced Value1",{{"% Desc_Esp_Shipped", type number}}),
-    #"Renamed Columns" = Table.RenameColumns(#"Changed Type6",{{"Main_Fact_Cred_Notes Holding_Month_SKU_subcode.rebate", "rebate"}})
-in
-    #"Renamed Columns"
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////NIS//////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
 let
     Source = Odbc.Query(
         "host=Drona-impala.cargill.com;port=21050;driver={Cloudera ODBC Driver for Impala};usesystemtruststore=1;ssl=1;checkcertrevocation=0;authmech=1;usenativequery=1",
@@ -196,7 +43,37 @@ let
     #"Changed Type1" = Table.TransformColumnTypes(#"Replaced Value26",{{"Rebate_Naturisa", type number}, {"Rebate_Otros", type number}, {"Rebate_Especiales", type number}}),
     #"Added Custom22" = Table.AddColumn(#"Changed Type1", "Rebate", each [Rebate_Naturisa]+[Rebate_Otros]+[Rebate_Especiales]),
     #"Changed Type19" = Table.TransformColumnTypes(#"Added Custom22",{{"Rebate", type number}}),
-    #"Added Custom23" = Table.AddColumn(#"Changed Type19", "Margin NIS", each [#"$ sales"]-[#"extended cost (f) adj."]-[#"$ discount"]-[Rebate]),
+
+    // Traer el monto ESPECIFICO por línea+mes
+    #"Merged CN Specific" =
+    Table.NestedJoin(
+        #"Changed Type19",
+        {"customer number","product code","sub code","form code","month_year_nat"},
+        CN_Total_Specific_LineMonth,
+        {"cliente_id","code","sub_code","form","mes_año"},
+        "CN_Specific",
+        JoinKind.LeftOuter
+    ),
+    #"Expanded CN Specific" =
+    Table.ExpandTableColumn(#"Merged CN Specific","CN_Specific",{"CN_Total_Discount"},{"CN_Total_Discount"}),
+    #"CN null to 0" =
+    Table.ReplaceValue(#"Expanded CN Specific", null, 0, Replacer.ReplaceValue, {"CN_Total_Discount"}),
+
+    // Elegir una sola caja: ESPECIFICO = monto CN; GENERICO = prorrateo que ya hiciste
+    #"Rebate_Final" =
+    Table.AddColumn(#"CN null to 0", "Rebate_Final",
+        each if [rebate_clasification] = "ESPECIFICO"
+             then [CN_Total_Discount]
+             else [Rebate],
+        type number
+    ),
+
+    // Cambiar Rebate por el final para que el resto del flujo siga igual
+    #"Drop Old Rebate" = Table.RemoveColumns(#"Rebate_Final",{"Rebate"}),
+    #"Rename Final Rebate" = Table.RenameColumns(#"Drop Old Rebate",{{"Rebate_Final","Rebate"}}),
+
+    // Recalcular Margin NIS con el Rebate ya corregido
+    #"Added Custom23" = Table.AddColumn(#"Rename Final Rebate", "Margin NIS", each [#"$ sales"]-[#"extended cost (f) adj."]-[#"$ discount"]-[Rebate]),
     #"Changed Type20" = Table.TransformColumnTypes(#"Added Custom23",{{"Margin NIS", type number}}),
 
     #"Merged Queries5" = Table.NestedJoin(#"Changed Type20", {"fiscal_year"}, #"JDE_Fact_key_FY toll mill", {"fiscal_year"}, "JDE_Fact_key_FY toll mill", JoinKind.LeftOuter),
@@ -318,91 +195,9 @@ in
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 let
-  Source = Odbc.Query(
-    "host=Drona-impala.cargill.com;port=21050;driver={Cloudera ODBC Driver for Impala};usesystemtruststore=1;ssl=1;checkcertrevocation=0;authmech=1;usenativequery=1",
-"
-SELECT
-  TRIM(CAST(NC.numero_cliente AS STRING)) AS cliente_id,
-  TRIM(CAST(NC.codigo         AS STRING)) AS code,
-  TRIM(CAST(NC.sub_codigo     AS STRING)) AS sub_code,
-  TRIM(CAST(NC.forma          AS STRING)) AS form,
-  CONCAT(CAST(MONTH(fecha_corregida) AS STRING),'_',CAST(YEAR(fecha_corregida) AS STRING)) AS mes_año,
-  SUM(CAST(NC.totaldesc AS DOUBLE)) AS CN_Total_Discount
-FROM (
-  SELECT
-    numero_cliente, codigo, sub_codigo, forma, totaldesc, rebate,
-    FROM_UNIXTIME(
-      UNIX_TIMESTAMP(
-        CONCAT(SUBSTR(mes_ano,6,2),'/',SUBSTR(mes_ano,4,2),'/', '20',SUBSTR(mes_ano,2,2),' ','00:00:00'),
-        'dd/MM/yyyy HH:mm:ss'
-      )
-    ) AS fecha_corregida
-  FROM dev_internal_anh_customer_profitability.tb_credit_notes_new
-) NC
-WHERE UPPER(TRIM(NC.rebate)) = 'ESPECIFICO'
-GROUP BY 1,2,3,4,5;
-"
-  ),
-  #"Changed Type" = Table.TransformColumnTypes(Source,{{"CN_Total_Discount", type number}})
+  Source = Odbc.Query("host=Drona-impala.cargill.com;port=21050;driver={Cloudera ODBC Driver for Impala};usesystemtruststore=1;ssl=1;checkcertrevocation=0;authmech=1;usenativequery=1", "SELECT#(lf)  CAST(NC.numero_cliente AS BIGINT)                    AS cliente_id,     -- <- entero para matchear con NIS#(lf)  TRIM(CAST(NC.codigo AS STRING))                      AS code,#(lf)  CASE#(lf)    WHEN NC.sub_codigo IS NULL THEN ''#(lf)    WHEN LOWER(TRIM(CAST(NC.sub_codigo AS STRING))) IN ('nan','null','na','-','.') THEN ''#(lf)    ELSE TRIM(CAST(NC.sub_codigo AS STRING))#(lf)  END                                                  AS sub_code,#(lf)  CASE#(lf)    WHEN NC.forma IS NULL THEN ''#(lf)    WHEN LOWER(TRIM(CAST(NC.forma AS STRING))) IN ('nan','null','na','-','.') THEN ''#(lf)    ELSE TRIM(CAST(NC.forma AS STRING))#(lf)  END                                                  AS form,#(lf)  CONCAT(CAST(MONTH(fecha_corregida) AS STRING),'_',CAST(YEAR(fecha_corregida) AS STRING)) AS mes_año,#(lf)  SUM(CAST(NC.totaldesc AS DOUBLE))                    AS CN_Total_Discount#(lf)FROM (#(lf)  SELECT#(lf)    numero_cliente, codigo, sub_codigo, forma, totaldesc, rebate,#(lf)    FROM_UNIXTIME(#(lf)      UNIX_TIMESTAMP(#(lf)        CONCAT(SUBSTR(mes_ano,6,2),'/',SUBSTR(mes_ano,4,2),'/','20',SUBSTR(mes_ano,2,2),' 00:00:00'),#(lf)        'dd/MM/yyyy HH:mm:ss'#(lf)      )#(lf)    ) AS fecha_corregida#(lf)  FROM dev_internal_anh_customer_profitability.tb_credit_notes_new#(lf)  WHERE UPPER(TRIM(rebate))='ESPECIFICO'#(lf)) NC#(lf)GROUP BY 1,2,3,4,5"),
+  #"Changed Type" =Table.TransformColumnTypes(Source,{{"cliente_id", Int64.Type},{"code", type text},{"sub_code", type text},{"form", type text},{"mes_año", type text},{"cn_total_discount", type number}})
 in
-  #"Changed Type"
-
-
-
-
-
--------------------
-
-// Traer el monto ESPECIFICO por línea+mes
-#"Merged CN Specific" =
-    Table.NestedJoin(
-        #"Changed Type19",
-        {"customer number","product code","sub code","form code","month_year_nat"},
-        CN_Total_Specific_LineMonth,
-        {"cliente_id","code","sub_code","form","mes_año"},
-        "CN_Specific",
-        JoinKind.LeftOuter
-    ),
-#"Expanded CN Specific" =
-    Table.ExpandTableColumn(#"Merged CN Specific","CN_Specific",{"CN_Total_Discount"},{"CN_Total_Discount"}),
-#"CN null to 0" =
-    Table.ReplaceValue(#"Expanded CN Specific", null, 0, Replacer.ReplaceValue, {"CN_Total_Discount"}),
-
-// Elegir una sola caja: ESPECIFICO = monto CN; GENERICO = prorrateo que ya hiciste
-#"Rebate_Final" =
-    Table.AddColumn(#"CN null to 0", "Rebate_Final",
-        each if [rebate_clasification] = "ESPECIFICO"
-             then [CN_Total_Discount]
-             else [Rebate],
-        type number
-    ),
-
-// Cambiar Rebate por el final para que el resto del flujo siga igual
-#"Drop Old Rebate" = Table.RemoveColumns(#"Rebate_Final",{"Rebate"}),
-#"Rename Final Rebate" = Table.RenameColumns(#"Drop Old Rebate",{{"Rebate_Final","Rebate"}}),
-
-// Recalcular Margin NIS con el Rebate ya corregido
-#"Added Custom23" = Table.AddColumn(#"Rename Final Rebate", "Margin NIS", each [#"$ sales"]-[#"extended cost (f) adj."]-[#"$ discount"]-[Rebate]),
-#"Changed Type20" = Table.TransformColumnTypes(#"Added Custom23",{{"Margin NIS", type number}})
-
+    #"Changed Type"
