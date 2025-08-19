@@ -31,10 +31,17 @@ let
     #"Changed Type14" = Table.TransformColumnTypes(#"Norm DE rebate",{{"Discounts_Especiales.% Desc_Esp_Shipped", type number}}),
     #"Renamed Columns9" = Table.RenameColumns(#"Changed Type14",{{"Discounts_Especiales.% Desc_Esp_Shipped", "Desc (Especiales)"}, {"Desc_Naturisa", "Desc (Naturisa)"}}),
 
-    // Rebates calculados usando la clasificación que viene del SQL
-    #"Added Custom16" = Table.AddColumn(#"Renamed Columns9", "Rebate_Naturisa", each if [rebate_clasification] = "ESPECIFICO" then [#"Desc (Naturisa)"] else [net revenue kus]*[#"Desc (Naturisa)"]*1000),
-    #"Added Custom20" = Table.AddColumn(#"Added Custom16", "Rebate_Otros", each if [rebate_clasification] = "ESPECIFICO" then [#"Desc (OTROS)"] else [#"Desc (OTROS)"]*[net revenue kus]*1000),
-    #"Added Custom21" = Table.AddColumn(#"Added Custom20", "Rebate_Especiales", each if [rebate_clasification] = "ESPECIFICO" then [#"Desc (Especiales)"] else [#"Desc (Especiales)"]*[tons shipped]),
+    // === NUEVO: llaves normalizadas para empatar con la Auxiliar ===
+    #"Add key: code_u" = Table.AddColumn(#"Renamed Columns9","code_u", each Text.Upper(Text.Trim(if [product code] = null then "" else Text.From([product code]))), type text),
+    #"Add key: sub_u"  = Table.AddColumn(#"Add key: code_u","sub_u",  each Text.Upper(Text.Trim(if [sub code]     = null then "" else Text.From([sub code]))), type text),
+    #"Add key: form_u" = Table.AddColumn(#"Add key: sub_u","form_u",  each Text.Upper(Text.Trim(if [form code]    = null then "" else Text.From([form code]))), type text),
+    #"Add key: mes_u"  = Table.AddColumn(#"Add key: form_u","mes_u",  each Text.Upper(Text.Trim(if [month_year_nat] = null then "" else Text.From([month_year_nat]))), type text),
+    #"Cust to Int64"   = Table.TransformColumnTypes(#"Add key: mes_u",{{"customer number", Int64.Type}}),
+
+    // Rebates calculados con la clasif. original (se sobreescriben luego si es ESPECIFICO)
+    #"Added Custom16" = Table.AddColumn(#"Cust to Int64", "Rebate_Naturisa",  each if [rebate_clasification] = "ESPECIFICO" then [#"Desc (Naturisa)"] else [net revenue kus]*[#"Desc (Naturisa)"]*1000),
+    #"Added Custom20" = Table.AddColumn(#"Added Custom16", "Rebate_Otros",     each if [rebate_clasification] = "ESPECIFICO" then [#"Desc (OTROS)"]    else [#"Desc (OTROS)"]*[net revenue kus]*1000),
+    #"Added Custom21" = Table.AddColumn(#"Added Custom20", "Rebate_Especiales",each if [rebate_clasification] = "ESPECIFICO" then [#"Desc (Especiales)"] else [#"Desc (Especiales)"]*[tons shipped]),
 
     #"Changed Type" = Table.TransformColumnTypes(#"Added Custom21",{{"Rebate_Naturisa", type text}, {"Rebate_Otros", type text}, {"Rebate_Especiales", type text}}),
     #"Replaced Value24" = Table.ReplaceValue(#"Changed Type",null,"0",Replacer.ReplaceValue,{"Rebate_Naturisa", "Rebate_Otros", "Rebate_Especiales"}),
@@ -44,35 +51,42 @@ let
     #"Added Custom22" = Table.AddColumn(#"Changed Type1", "Rebate", each [Rebate_Naturisa]+[Rebate_Otros]+[Rebate_Especiales]),
     #"Changed Type19" = Table.TransformColumnTypes(#"Added Custom22",{{"Rebate", type number}}),
 
-    // Traer el monto ESPECIFICO por línea+mes
+    // === NUEVO: Join con Auxiliar usando llaves normalizadas (cliente+code+sub+form+mes)
     #"Merged CN Specific" =
-    Table.NestedJoin(
-        #"Changed Type19",
-        {"customer number","product code","sub code","form code","month_year_nat"},
-        CN_Total_Specific_LineMonth,
-        {"cliente_id","code","sub_code","form","mes_año"},
-        "CN_Specific",
-        JoinKind.LeftOuter
-    ),
+        Table.NestedJoin(
+            #"Changed Type19",
+            {"customer number","code_u","sub_u","form_u","mes_u"},
+            CN_Total_Specific_LineMonth,
+            {"cliente_id","code","sub_code","form","mes_año"},
+            "CN_Specific",
+            JoinKind.LeftOuter
+        ),
     #"Expanded CN Specific" =
-    Table.ExpandTableColumn(#"Merged CN Specific","CN_Specific",{"CN_Total_Discount"},{"CN_Total_Discount"}),
+        Table.ExpandTableColumn(#"Merged CN Specific","CN_Specific",{"CN_Total_Discount"},{"CN_Total_Discount"}),
     #"CN null to 0" =
-    Table.ReplaceValue(#"Expanded CN Specific", null, 0, Replacer.ReplaceValue, {"CN_Total_Discount"}),
+        Table.ReplaceValue(#"Expanded CN Specific", null, 0, Replacer.ReplaceValue, {"CN_Total_Discount"}),
 
-    // Elegir una sola caja: ESPECIFICO = monto CN; GENERICO = prorrateo que ya hiciste
+    // === NUEVO: si hay monto en Auxiliar, forzar clasificación ESPECIFICO
+    #"Fix Classification" =
+        Table.AddColumn(#"CN null to 0","rebate_flag_from_aux",
+            each if [CN_Total_Discount] <> 0 then "ESPECIFICO" else [rebate_clasification],
+            type text
+        ),
+
+    // ESPECIFICO = monto CN; GENERICO = prorrateo calculado
     #"Rebate_Final" =
-    Table.AddColumn(#"CN null to 0", "Rebate_Final",
-        each if [rebate_clasification] = "ESPECIFICO"
-             then [CN_Total_Discount]
-             else [Rebate],
-        type number
-    ),
+        Table.AddColumn(#"Fix Classification", "Rebate_Final",
+            each if [rebate_flag_from_aux] = "ESPECIFICO"
+                 then [CN_Total_Discount]
+                 else [Rebate],
+            type number
+        ),
 
-    // Cambiar Rebate por el final para que el resto del flujo siga igual
+    // Sustituir Rebate por el final
     #"Drop Old Rebate" = Table.RemoveColumns(#"Rebate_Final",{"Rebate"}),
     #"Rename Final Rebate" = Table.RenameColumns(#"Drop Old Rebate",{{"Rebate_Final","Rebate"}}),
 
-    // Recalcular Margin NIS con el Rebate ya corregido
+    // Recalcular Margin NIS con Rebate corregido
     #"Added Custom23" = Table.AddColumn(#"Rename Final Rebate", "Margin NIS", each [#"$ sales"]-[#"extended cost (f) adj."]-[#"$ discount"]-[Rebate]),
     #"Changed Type20" = Table.TransformColumnTypes(#"Added Custom23",{{"Margin NIS", type number}}),
 
