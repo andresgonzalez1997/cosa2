@@ -1,4 +1,33 @@
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
+SELECT
+  TRIM(CAST(NC.numero_cliente AS STRING))                        AS cliente_id,
+  TRIM(CAST(NC.codigo         AS STRING))                        AS code,
+  /* sub_code limpio */
+  CASE
+    WHEN NC.sub_codigo IS NULL THEN ''
+    WHEN LOWER(TRIM(CAST(NC.sub_codigo AS STRING))) IN ('nan','null','na','') THEN ''
+    ELSE TRIM(CAST(NC.sub_codigo AS STRING))
+  END                                                           AS sub_code,
+  /* form limpio */
+  CASE
+    WHEN NC.forma IS NULL THEN ''
+    WHEN LOWER(TRIM(CAST(NC.forma AS STRING))) IN ('nan','null','na','') THEN ''
+    ELSE TRIM(CAST(NC.forma AS STRING))
+  END                                                           AS form,
+  CONCAT(CAST(MONTH(fecha_corregida) AS STRING),'_',CAST(YEAR(fecha_corregida) AS STRING)) AS mes_año,
+  SUM(CAST(NC.totaldesc AS DOUBLE))                             AS CN_Total_Discount
+FROM (
+  SELECT
+    numero_cliente, codigo, sub_codigo, forma, totaldesc, rebate,
+    FROM_UNIXTIME(
+      UNIX_TIMESTAMP(
+        CONCAT(SUBSTR(mes_ano,6,2),'/',SUBSTR(mes_ano,4,2),'/','20',SUBSTR(mes_ano,2,2),' ','00:00:00'),
+        'dd/MM/yyyy HH:mm:ss'
+      )
+    ) AS fecha_corregida
+  FROM dev_internal_anh_customer_profitability.tb_credit_notes_new
+) NC
+WHERE UPPER(TRIM(NC.rebate)) = 'ESPECIFICO'
+GROUP BY 1,2,3,4,5;////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////Main Fact Cred Notes Holding Month/////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 let
