@@ -285,3 +285,94 @@ let
     #"Changed Type11" = Table.TransformColumnTypes(#"Added Custom3",{{"TaxBase", type number}, {"AOE-TaxBase", type number}})
 in
     #"Changed Type11"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+let
+  Source = Odbc.Query(
+    "host=Drona-impala.cargill.com;port=21050;driver={Cloudera ODBC Driver for Impala};usesystemtruststore=1;ssl=1;checkcertrevocation=0;authmech=1;usenativequery=1",
+"
+SELECT
+  TRIM(CAST(NC.numero_cliente AS STRING)) AS cliente_id,
+  TRIM(CAST(NC.codigo         AS STRING)) AS code,
+  TRIM(CAST(NC.sub_codigo     AS STRING)) AS sub_code,
+  TRIM(CAST(NC.forma          AS STRING)) AS form,
+  CONCAT(CAST(MONTH(fecha_corregida) AS STRING),'_',CAST(YEAR(fecha_corregida) AS STRING)) AS mes_año,
+  SUM(CAST(NC.totaldesc AS DOUBLE)) AS CN_Total_Discount
+FROM (
+  SELECT
+    numero_cliente, codigo, sub_codigo, forma, totaldesc, rebate,
+    FROM_UNIXTIME(
+      UNIX_TIMESTAMP(
+        CONCAT(SUBSTR(mes_ano,6,2),'/',SUBSTR(mes_ano,4,2),'/', '20',SUBSTR(mes_ano,2,2),' ','00:00:00'),
+        'dd/MM/yyyy HH:mm:ss'
+      )
+    ) AS fecha_corregida
+  FROM dev_internal_anh_customer_profitability.tb_credit_notes_new
+) NC
+WHERE UPPER(TRIM(NC.rebate)) = 'ESPECIFICO'
+GROUP BY 1,2,3,4,5;
+"
+  ),
+  #"Changed Type" = Table.TransformColumnTypes(Source,{{"CN_Total_Discount", type number}})
+in
+  #"Changed Type"
+
+
+
+
+
+-------------------
+
+// Traer el monto ESPECIFICO por línea+mes
+#"Merged CN Specific" =
+    Table.NestedJoin(
+        #"Changed Type19",
+        {"customer number","product code","sub code","form code","month_year_nat"},
+        CN_Total_Specific_LineMonth,
+        {"cliente_id","code","sub_code","form","mes_año"},
+        "CN_Specific",
+        JoinKind.LeftOuter
+    ),
+#"Expanded CN Specific" =
+    Table.ExpandTableColumn(#"Merged CN Specific","CN_Specific",{"CN_Total_Discount"},{"CN_Total_Discount"}),
+#"CN null to 0" =
+    Table.ReplaceValue(#"Expanded CN Specific", null, 0, Replacer.ReplaceValue, {"CN_Total_Discount"}),
+
+// Elegir una sola caja: ESPECIFICO = monto CN; GENERICO = prorrateo que ya hiciste
+#"Rebate_Final" =
+    Table.AddColumn(#"CN null to 0", "Rebate_Final",
+        each if [rebate_clasification] = "ESPECIFICO"
+             then [CN_Total_Discount]
+             else [Rebate],
+        type number
+    ),
+
+// Cambiar Rebate por el final para que el resto del flujo siga igual
+#"Drop Old Rebate" = Table.RemoveColumns(#"Rebate_Final",{"Rebate"}),
+#"Rename Final Rebate" = Table.RenameColumns(#"Drop Old Rebate",{{"Rebate_Final","Rebate"}}),
+
+// Recalcular Margin NIS con el Rebate ya corregido
+#"Added Custom23" = Table.AddColumn(#"Rename Final Rebate", "Margin NIS", each [#"$ sales"]-[#"extended cost (f) adj."]-[#"$ discount"]-[Rebate]),
+#"Changed Type20" = Table.TransformColumnTypes(#"Added Custom23",{{"Margin NIS", type number}})
+
