@@ -1,20 +1,50 @@
 SELECT
-  CAST(NC.numero_cliente AS BIGINT)                                   AS cliente_id,
-  UPPER(TRIM(CAST(NC.codigo AS STRING)))                               AS code,
+  CAST(NC.numero_cliente AS BIGINT)                                     AS cliente_id,
+  UPPER(TRIM(CAST(NC.codigo AS STRING)))                                 AS code,
   UPPER(
-    CASE WHEN NC.sub_codigo IS NULL THEN ''
-         WHEN LOWER(TRIM(CAST(NC.sub_codigo AS STRING))) IN ('nan','null','na','-','.') THEN ''
-         ELSE TRIM(CAST(NC.sub_codigo AS STRING)) END
-  ) AS sub_code,
+    CASE
+      WHEN NC.sub_codigo IS NULL THEN ''
+      WHEN LOWER(TRIM(CAST(NC.sub_codigo AS STRING))) IN ('nan','null','na','-','.') THEN ''
+      ELSE TRIM(CAST(NC.sub_codigo AS STRING))
+    END
+  )                                                                       AS sub_code,
   UPPER(
-    CASE WHEN NC.forma IS NULL THEN ''
-         WHEN LOWER(TRIM(CAST(NC.forma AS STRING))) IN ('nan','null','na','-','.') THEN ''
-         ELSE TRIM(CAST(NC.forma AS STRING)) END
-  ) AS form,
-  CONCAT(CAST(MONTH(fecha_corregida) AS STRING),'_',CAST(YEAR(fecha_corregida) AS STRING)) AS mes_año,
-  SUM(CAST(NC.totaldesc AS DOUBLE)) AS CN_Total_Discount
-FROM ( ... WHERE UPPER(TRIM(rebate))='ESPECIFICO' ) NC
+    CASE
+      WHEN NC.forma IS NULL THEN ''
+      WHEN LOWER(TRIM(CAST(NC.forma AS STRING))) IN ('nan','null','na','-','.') THEN ''
+      ELSE TRIM(CAST(NC.forma AS STRING))
+    END
+  )                                                                       AS form,
+  CONCAT(
+    CAST(MONTH(fecha_corregida) AS STRING),
+    '_',
+    CAST(YEAR(fecha_corregida)  AS STRING)
+  )                                                                       AS mes_año,
+  SUM(CAST(NC.totaldesc AS DOUBLE))                                       AS CN_Total_Discount
+FROM (
+  SELECT
+    numero_cliente,
+    codigo,
+    sub_codigo,
+    forma,
+    totaldesc,
+    rebate,
+    FROM_UNIXTIME(
+      UNIX_TIMESTAMP(
+        CONCAT(
+          SUBSTR(mes_ano, 6, 2), '/',     -- día
+          SUBSTR(mes_ano, 4, 2), '/',     -- mes
+          '20', SUBSTR(mes_ano, 2, 2),    -- año
+          ' 00:00:00'
+        ),
+        'dd/MM/yyyy HH:mm:ss'
+      )
+    ) AS fecha_corregida
+  FROM dev_internal_anh_customer_profitability.tb_credit_notes_new
+  WHERE UPPER(TRIM(rebate)) = 'ESPECIFICO'
+) NC
 GROUP BY 1,2,3,4,5;
+
 
 --------------------------------------------------------------------------------------------------
 -- CLAVES PARA JOINS (no afectan visuals)
