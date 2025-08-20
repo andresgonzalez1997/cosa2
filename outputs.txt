@@ -1,4 +1,9 @@
+DataSource.Error: ODBC: ERROR [HY000] [Cloudera][ImpalaODBC] (370) Query analysis error occurred during query execution: [HY000] : AnalysisException: Could not resolve column/field reference: 'f.xiocos'
 
+Details:
+    DataSourceKind=Odbc
+    DataSourcePath=authmech=1;checkcertrevocation=0;driver={Cloudera ODBC Driver for Impala};host=Drona-impala.cargill.com;port=21050;ssl=1;usenativequery=1;usesystemtruststore=1
+    OdbcErrors=[Table]
 
 
 
