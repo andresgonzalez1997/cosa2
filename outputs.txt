@@ -30,14 +30,25 @@ let
     #"Added Custom22" = Table.AddColumn(#"Changed Type1", "Rebate", each [Rebate_Naturisa]+[Rebate_Otros]+[Rebate_Especiales]),
     #"Changed Type19" = Table.TransformColumnTypes(#"Added Custom22",{{"Rebate", type number}}),
 
-    // === NUEVO: unir con #"Keyword Notes" por 5 llaves + mes-año y aplicar la regla ESPECIFICO/GENERICO ===
-    #"Merged Keyword Notes" = Table.NestedJoin(#"Changed Type19", {"Customer Number","Product Code","Sub Code","Form Code","location","month_year_nat"}, #"Keyword Notes", {"Customer Number","Product Code","Sub Code","Form Code","location","month_year_nat"}, "Keyword Notes", JoinKind.LeftOuter),
+    // ---------- AQUI SE AGREGA Keyword Notes ----------
+    KN = 
+        if (try Value.Is(#"Keyword Notes", type table) otherwise false) 
+        then #"Keyword Notes" 
+        else error "No encuentro la consulta 'Keyword Notes'. Verifica que exista con ese nombre exacto (con espacio y mayúsculas).",
+
+    #"Merged Keyword Notes" = Table.NestedJoin(#"Changed Type19",
+        {"customer number","product code","sub code","form code","location","month_year_nat"},
+        KN,
+        {"customer number","product code","sub code","form code","location","month_year_nat"},
+        "Keyword Notes", JoinKind.LeftOuter),
+
     #"Expanded Keyword Notes" = Table.ExpandTableColumn(#"Merged Keyword Notes", "Keyword Notes", {"rebate","Total Discount"}, {"rebate","Total Discount"}),
     #"Changed Type_KN" = Table.TransformColumnTypes(#"Expanded Keyword Notes", {{"rebate", type text}, {"Total Discount", type number}}),
     #"Replaced KN null TD" = Table.ReplaceValue(#"Changed Type_KN", null, 0, Replacer.ReplaceValue, {"Total Discount"}),
     #"Rebate_Final" = Table.AddColumn(#"Replaced KN null TD", "Rebate_Final", each if Text.Lower(Text.Trim([rebate])) = "especifico" then [Total Discount] else [Rebate], type number),
     #"Drop Old Rebate" = Table.RemoveColumns(#"Rebate_Final",{"Rebate"}),
     #"Rename Final Rebate" = Table.RenameColumns(#"Drop Old Rebate",{{"Rebate_Final","Rebate"}}),
+    // ---------------------------------------------------
 
     #"Added Custom23" = Table.AddColumn(#"Rename Final Rebate", "Margin NIS", each [#"$ sales"]-[#"extended cost (f) adj."]-[#"$ discount"]-[Rebate]),
     #"Changed Type20" = Table.TransformColumnTypes(#"Added Custom23",{{"Margin NIS", type number}}),
@@ -141,6 +152,7 @@ let
     #"Changed Type11" = Table.TransformColumnTypes(#"Added Custom3",{{"TaxBase", type number}, {"AOE-TaxBase", type number}})
 in
     #"Changed Type11"
+
 
 
 --------------------------------------------------------------Advance Editor New ProRateo
