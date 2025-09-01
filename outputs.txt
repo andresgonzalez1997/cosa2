@@ -11,7 +11,12 @@ let
 in
     #"Renamed Columns"
 
+An error occurred in the ‘Main (Fact NIS) TotalMonth_YearMargin&tons_shipped’ query. DataSource.Error: ODBC: ERROR [HY000] [Cloudera][ImpalaODBC] (370) Query analysis error occurred during query execution: [HY000] : AnalysisException: Could not resolve column/field reference: 't.full_code'
 
+Details:
+    DataSourceKind=Odbc
+    DataSourcePath=authmech=1;checkcertrevocation=0;driver={Cloudera ODBC Driver for Impala};host=Drona-impala.cargill.com;port=21050;ssl=1;usenativequery=1;usesystemtruststore=1
+    OdbcErrors=[Table]
 
 
 
