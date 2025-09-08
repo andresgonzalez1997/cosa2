@@ -1,145 +1,28 @@
 --------------------------------------------------------------Advance Editor Chat ProRateo
+(En DAX como columnas calculadas)
+-- Asegúrate que [Period] sea tipo Date
+PeriodStart = 'Monthly_Target'[Period]
 
--- =========================
--- BASE: tu medida existente
--- =========================
--- [Parameter MM]  -- ya existe en SPx Measures
-
--- =========================
--- PROYECTOS
--- =========================
-
--- P01 Down Size Ponds (.454) to 400 grams
-Real - P01 :=
+NextPeriodStart :=
 CALCULATE (
-    [Parameter MM],
-    KEEPFILTERS ( DataBase_SalesData[XICONT] = 400 )
+    MIN ( 'Monthly_Target'[Period] ),
+    FILTER (
+        ALL ( 'Monthly_Target' ),
+        'Monthly_Target'[Project ID] = EARLIER ( 'Monthly_Target'[Project ID] )
+            && 'Monthly_Target'[Project Name] = EARLIER ( 'Monthly_Target'[Project Name] )
+            && 'Monthly_Target'[Period] > EARLIER ( 'Monthly_Target'[Period] )
+    )
 )
 
--- P02 30LPS per unit in Pet Master 20kg
-Real - P02 :=
-CALCULATE (
-    [Parameter MM],
-    KEEPFILTERS ( Table_ShipFrom[Id_Cou] = "HN" ),
-    KEEPFILTERS ( Table_ShipTo[Id_ShippD] = "HN" ),
-    KEEPFILTERS ( Struct_MatMst[XIPRDC] IN { 7347, 8022, 8026 } ),
-    KEEPFILTERS ( DataBase_SalesData[XHPRCL] IN { 1, 2, 11, 14, 25 } )
+-- Cierra el rango al día anterior del siguiente Period.
+-- Si no hay siguiente, cierra al fin de mes del Period actual.
+PeriodEnd :=
+VAR _next = 'Monthly_Target'[NextPeriodStart]
+RETURN IF ( ISBLANK ( _next ),
+            EOMONTH ( 'Monthly_Target'[PeriodStart], 0 ),
+            _next - 1
 )
 
--- P03 DISNA Distributors
-Real - P03 :=
-CALCULATE (
-    [Parameter MM],
-    KEEPFILTERS ( Table_ShipFrom[Id_Cou] = "HN" ),
-    KEEPFILTERS ( Table_ShipTo[Id_ShippD] = "HN" ),
-    KEEPFILTERS ( DataBase_SalesData[XHPRCL] IN { 54 } )
-    -- En tu hoja no se ve SKU; si corresponde, añadilo acá como IN { ... }
-)
-
--- P04 Growth Pet Master Brand
-Real - P04 :=
-CALCULATE (
-    [Parameter MM],
-    KEEPFILTERS ( Table_ShipFrom[Id_Cou] = "HN" ),
-    KEEPFILTERS ( Table_ShipTo[Id_ShippD] = "PA" ),
-    KEEPFILTERS ( Struct_MatMst[XIPRDC] IN { 8023, 8026, 7347, 7346 } ),
-    KEEPFILTERS ( DataBase_SalesData[XHPRCL] IN { 18 } )
-)
-
--- P05 Price Index Gati ELDP
-Real - P05 :=
-CALCULATE (
-    [Parameter MM],
-    KEEPFILTERS ( Table_ShipFrom[Id_Cou] = "CR" ),
-    KEEPFILTERS ( Table_ShipTo[Id_ShippD] = "CR" ),
-    KEEPFILTERS ( Struct_MatMst[XIPRDC] IN { 9227, 9229, 9226, 9230 } ),  -- revisá si falta algún SKU de la lista
-    KEEPFILTERS ( DataBase_SalesData[XHPRCL] IN { 9, 15, 16, 17 } )
-)
-
--- P06 Traditional Channel Trade Discount
-Real - P06 :=
-CALCULATE (
-    [Parameter MM],
-    KEEPFILTERS ( Table_ShipFrom[Id_Cou] = "CR" ),
-    KEEPFILTERS ( Table_ShipTo[Id_ShippD] = "CR" ),
-    KEEPFILTERS ( Struct_MatMst[XIPRDC] IN { 8023, 8026, 7347, 7346 } ),
-    KEEPFILTERS ( DataBase_SalesData[XHPRCL] IN { 8, 15, 16, 17 } )
-)
-
--- P07 Price Index Gati 1kg vs Felix
-Real - P07 :=
-CALCULATE (
-    [Parameter MM],
-    KEEPFILTERS ( Table_ShipFrom[Id_Cou] = "HN" ),
-    KEEPFILTERS ( Table_ShipTo[Id_ShippD] = "PA" ),
-    KEEPFILTERS ( Struct_MatMst[XIPRDC] IN { 9204, 9203, 9230, 9201 } ),
-    KEEPFILTERS ( DataBase_SalesData[XHPRCL] IN { 9, 18 } )
-)
-
--- P08 Credit Memo 11% (Pay For Performance)
-Real - P08 :=
-CALCULATE (
-    [Parameter MM],
-    KEEPFILTERS ( Table_ShipFrom[Id_Cou] = "NI" ),
-    KEEPFILTERS ( Table_ShipTo[Id_ShippD] = "NI" ),
-    KEEPFILTERS ( Struct_MatMst[XIPRDC] IN { 7347, 7346 } ),
-    -- Price List: no aplica según tu hoja (vacío)
-    -- Customer ID: poné la lista completa según tu fila (en la imagen inicia 2710805,...)
-    KEEPFILTERS ( DataBase_SalesData[XHCSNO] IN { 2710805 /*, …completa tu lista*/ } )
-)
-
--- P09 GUANGOLOLA BROILER PROYECT (Industrial)
-Real - P09 :=
-CALCULATE (
-    [Parameter MM],
-    -- En la imagen: Price List = 9, y en "Customer Name" aparece 3212 (parece ID).
-    KEEPFILTERS ( DataBase_SalesData[XHPRCL] IN { 9 } ),
-    KEEPFILTERS ( DataBase_SalesData[XHCSNO] IN { 3212 } )  -- si fuera nombre, cámbialo por CMCSNM
-)
-
--- P10 Portafolio: Lanzamiento Tilapia 45% L3
-Real - P10 :=
-CALCULATE (
-    [Parameter MM],
-    KEEPFILTERS ( Table_ShipTo[Id_ShippD] = "HN" ),
-    KEEPFILTERS ( Struct_MatMst[XIPRDC] IN { "6645__L3_22.7" } ) -- usa el SKU exacto como texto
-)
-
--- P11 Portafolio: Lanzamiento Tilapia 40% E2
-Real - P11 :=
-CALCULATE (
-    [Parameter MM],
-    KEEPFILTERS ( Table_ShipTo[Id_ShippD] = "HN" ),
-    KEEPFILTERS ( Struct_MatMst[XIPRDC] IN { "6664__E2_22.7" } )
-)
-
--- P12 Price/Portfolio: Crecimiento Broiler 2
-Real - P12 :=
-CALCULATE (
-    [Parameter MM],
-    KEEPFILTERS ( Table_ShipTo[Id_ShippD] = "HN" )
-    -- Tu hoja dice "Ship to; Customer N". Agrega acá:
-    -- KEEPFILTERS ( DataBase_SalesData[CMCSNM] IN { "Nombre1", "Nombre2", ... } )
-)
-
--- P13 Growth: Siembra de cerdos (Carrusel)
-Real - P13 :=
-CALCULATE (
-    [Parameter MM],
-    KEEPFILTERS ( Table_ShipTo[Id_ShippD] = "NI" )
-    -- Agrega LineA y Segment cuando me pases los valores:
-    -- KEEPFILTERS ( DataBase_SalesData[PMPLIN] IN { "LineaX", "LineaY" } ),
-    -- KEEPFILTERS ( DataBase_SalesData[Cust_Segment] IN { "SegmentA", "SegmentB" } )
-)
-
--- P14 G2M Changes
-Real - P14 :=
-CALCULATE (
-    [Parameter MM],
-    KEEPFILTERS ( Table_ShipTo[Id_ShippD] = "GT" ),
-    KEEPFILTERS ( NOT Struct_MatMst[XIPRDC] IN { 7223 } ),  -- “Exclude - 7223”
-    KEEPFILTERS ( DataBase_SalesData[XHCSNO] IN { 302871, 300439 } )
-)
 
 
 
@@ -148,28 +31,39 @@ CALCULATE (
 ------------
 -----------
 ------------
-Real :=
-VAR _proj = SELECTEDVALUE ( 'Monthly Target'[Project] )
+
+
+Target (por rango) :=
+VAR _Start = MIN ( 'Table_Dates'[Date] )
+VAR _End   = MAX ( 'Table_Dates'[Date] )
 RETURN
-SWITCH (
-    TRUE(),
-    _proj = 1, [Real - P01],
-    _proj = 2, [Real - P02],
-    _proj = 3, [Real - P03],
-    _proj = 4, [Real - P04],
-    _proj = 5, [Real - P05],
-    _proj = 6, [Real - P06],
-    _proj = 7, [Real - P07],
-    _proj = 8, [Real - P08],
-    _proj = 9, [Real - P09],
-    _proj = 10, [Real - P10],
-    _proj = 11, [Real - P11],
-    _proj = 12, [Real - P12],
-    _proj = 13, [Real - P13],
-    _proj = 14, [Real - P14],
-    BLANK()
+SUMX (
+    FILTER (
+        'Monthly_Target',
+        'Monthly_Target'[PeriodStart] <= _End
+            && 'Monthly_Target'[PeriodEnd]   >= _Start
+    ),
+    'Monthly_Target'[Target]
 )
 
+
+Parameter MM (Calendar) :=
+CALCULATE (
+    [Parameter MM],
+    USERELATIONSHIP ( DataBase_SalesData[PostingDate], 'Table_Dates'[Date] )   -- cambia a tu fecha real
+)
+
+
+
+
+Real - P04 :=
+CALCULATE(
+    [Parameter MM (Calendar)],
+    KEEPFILTERS( Table_ShipFrom[Id_Cou] = "HN" ),
+    KEEPFILTERS( Table_ShipTo[Id_ShippD] = "PA" ),
+    KEEPFILTERS( Struct_MatMst[XIPRDC] IN { 8023, 8026, 7347, 7346 } ),
+    KEEPFILTERS( DataBase_SalesData[XHPRCL] = "18" )
+)
 
 
 
