@@ -1,72 +1,21 @@
 --------------------------------------------------------------Advance Editor Chat ProRateo
-(En DAX como columnas calculadas)
--- Asegúrate que [Period] sea tipo Date
-PeriodStart = 'Monthly_Target'[Period]
-
-NextPeriodStart :=
-CALCULATE (
-    MIN ( 'Monthly_Target'[Period] ),
-    FILTER (
-        ALL ( 'Monthly_Target' ),
-        'Monthly_Target'[Project ID] = EARLIER ( 'Monthly_Target'[Project ID] )
-            && 'Monthly_Target'[Project Name] = EARLIER ( 'Monthly_Target'[Project Name] )
-            && 'Monthly_Target'[Period] > EARLIER ( 'Monthly_Target'[Period] )
+MM_Flat :=
+VAR Base =
+    SUMMARIZECOLUMNS(
+        DataBase_SalesData[invoice_date],       -- fecha
+        Table_ShipFrom[Id_Cou],                 -- From
+        Table_ShipTo[Id_ShippD],                -- To
+        Struct_MatMst[XIPRDC],                  -- SKU (numérico)
+        DataBase_SalesData[XHPRCL],             -- Price List (texto)
+        DataBase_SalesData[XICONT],             -- Container
+        DataBase_SalesData[XHCSNO]              -- Customer ID (si lo usas)
+        -- agrega aquí otros campos que quieras tener como filtros (LineA, Segment, etc.)
     )
-)
-
--- Cierra el rango al día anterior del siguiente Period.
--- Si no hay siguiente, cierra al fin de mes del Period actual.
-PeriodEnd :=
-VAR _next = 'Monthly_Target'[NextPeriodStart]
-RETURN IF ( ISBLANK ( _next ),
-            EOMONTH ( 'Monthly_Target'[PeriodStart], 0 ),
-            _next - 1
-)
-
-
-
-
-
-
-------------
------------
-------------
-
-
-Target (por rango) :=
-VAR _Start = MIN ( 'Table_Dates'[Date] )
-VAR _End   = MAX ( 'Table_Dates'[Date] )
 RETURN
-SUMX (
-    FILTER (
-        'Monthly_Target',
-        'Monthly_Target'[PeriodStart] <= _End
-            && 'Monthly_Target'[PeriodEnd]   >= _Start
-    ),
-    'Monthly_Target'[Target]
+ADDCOLUMNS(
+    Base,
+    "MM", CALCULATE( [Parameter MM] )           -- valor real ya evaluado en ese grano
 )
-
-
-Parameter MM (Calendar) :=
-CALCULATE (
-    [Parameter MM],
-    USERELATIONSHIP ( DataBase_SalesData[PostingDate], 'Table_Dates'[Date] )   -- cambia a tu fecha real
-)
-
-
-
-
-Real - P04 :=
-CALCULATE(
-    [Parameter MM (Calendar)],
-    KEEPFILTERS( Table_ShipFrom[Id_Cou] = "HN" ),
-    KEEPFILTERS( Table_ShipTo[Id_ShippD] = "PA" ),
-    KEEPFILTERS( Struct_MatMst[XIPRDC] IN { 8023, 8026, 7347, 7346 } ),
-    KEEPFILTERS( DataBase_SalesData[XHPRCL] = "18" )
-)
-
-
-
 
 
 
