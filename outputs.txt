@@ -1,22 +1,26 @@
 --------------------------------------------------------------Advance Editor Chat ProRateo
-MM_Flat :=
+MM_Flat_FY :=
 VAR Base =
     SUMMARIZECOLUMNS(
-        DataBase_SalesData[invoice_date],       -- fecha
-        Table_ShipFrom[Id_Cou],                 -- From
-        Table_ShipTo[Id_ShippD],                -- To
-        Struct_MatMst[XIPRDC],                  -- SKU (numérico)
-        DataBase_SalesData[XHPRCL],             -- Price List (texto)
-        DataBase_SalesData[XICONT],             -- Container
-        DataBase_SalesData[XHCSNO]              -- Customer ID (si lo usas)
-        -- agrega aquí otros campos que quieras tener como filtros (LineA, Segment, etc.)
+        'Table_Dates'[Fiscal Year],
+        'Table_Dates'[Fiscal Month],
+        Table_ShipFrom[Id_Cou],           -- From (texto)
+        Table_ShipTo[Id_ShippD],          -- To (texto)
+        Struct_MatMst[XIPRDC],            -- SKU (numérico)
+        DataBase_SalesData[XHPRCL],       -- Price List (texto)
+        -- agrega si lo necesitás:
+        -- DataBase_SalesData[XICONT],    -- Container (numérico)
+        -- DataBase_SalesData[XHCSNO],    -- Customer ID (numérico)
+        "MM", [Parameter MM]              -- Agregado al mes fiscal
     )
 RETURN
 ADDCOLUMNS(
     Base,
-    "MM", CALCULATE( [Parameter MM] )           -- valor real ya evaluado en ese grano
+    "FY_MonthKey", 'Table_Dates'[Fiscal Year]*100 + 'Table_Dates'[Fiscal Month]
 )
 
+FY_MonthKey =
+'Table_Dates'[Fiscal Year] * 100 + 'Table_Dates'[Fiscal Month]
 
 
 
