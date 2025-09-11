@@ -1,23 +1,23 @@
 --------------------------------------------------------------Advance Editor Chat ProRateo
 02 Project (30LPS per unit in Pet Master 20kg ) =
 VAR _VolSel  = SELECTEDVALUE ( Table_VolumeType[Volume Type], "TM Facturado" )
-VAR _CostSel = SELECTEDVALUE ( Table_CostType[Cost Type], "FIFO" )
+VAR _CostSel = SELECTEDVALUE ( Table_CostType[Cost Type],     "FIFO" )
 VAR _CatSel  = SELECTEDVALUE ( Table_MatCat[Material Category], "Pet Food" )
 
--- Limitar la base ANTES de resumir
+-- Limita la base ANTES de resumir (menos filas, mismo resultado)
 VAR BaseFiltered :=
     FILTER (
         DataBase_SalesData,
             DataBase_SalesData[FY] = "FY26"
         &&  DataBase_SalesData[FY_Month] = "FY26_JUL"
-        &&  DataBase_SalesData[XHPRCL] IN { "1", "2", "11", "14", "25" }
+        &&  DataBase_SalesData[XHPRCL] IN { "1","2","11","14","25" }
     )
 
 RETURN
 FILTER (
     ADDCOLUMNS (
         SUMMARIZECOLUMNS (
-            -- Granularidad de la visual
+            /* Granularidad que usas en la visual */
             DataBase_SalesData[FY],
             DataBase_SalesData[FY_Month],
             DataBase_SalesData[XHPRCL],
@@ -27,39 +27,30 @@ FILTER (
             Table_ShipTo[Id_ShippD],
             Struct_CusMst[SEGM_CODE],
 
-            -- Tabla filtrada para reducir filas
+            /* Restringe la fact de entrada */
             BaseFiltered,
 
-            -- ⬇️ Inyectar los “slicers” como filtros REALES del contexto
-            TREATAS ( { _VolSel },  Table_VolumeType[Volume Type] ),
+            /* Inyecta los “slicers” como filtros REALES */
+            TREATAS ( { _VolSel  }, Table_VolumeType[Volume Type] ),
             TREATAS ( { _CostSel }, Table_CostType[Cost Type] ),
-            TREATAS ( { _CatSel },  Table_MatCat[Material Category] )
+            TREATAS ( { _CatSel  }, Table_MatCat[Material Category] )
         ),
 
-        /* ========= MEDIDAS ========= */
+        /* == Medidas con el mismo contexto que la visual == */
         "COGS",
-            CALCULATE ( [TT Cst E2E V2.1] ),             -- ya ve _VolSel/_CostSel/_CatSel por TREATAS
+            CALCULATE ( [TT Cst E2E V2.1] ),
         "TT Mrgn E2E Log",
-            CALCULATE (
-                [TT Mrgn E2E Log]
-                -- si en la página quitás “Credit Memo” y “Logistic COGS”, fuerza igual aquí:
-                -- , KEEPFILTERS ( NOT ( 'Cost'[Cost Type] IN { "Credit Memo", "Logistic COGS" } ) )
-            ),
+            CALCULATE ( [TT Mrgn E2E Log] ),
         "Parameter mm",
             CALCULATE ( [Parameter MM] ),
 
-        /* ========= META ========= */
+        /* == Meta del proyecto == */
         "Project ID",   2,
         "Project Name", "30LPS per unit in Pet Master 20kg",
-        "Target",       0,
-
-        /* ========= DIAGNÓSTICO (puedes borrar luego) ========= */
-        "Check Vol", SELECTEDVALUE ( Table_VolumeType[Volume Type], "(blank)" ),
-        "Check Cost", SELECTEDVALUE ( Table_CostType[Cost Type], "(blank)" ),
-        "Check Cat", SELECTEDVALUE ( Table_MatCat[Material Category], "(blank)" )
+        "Target",       0
     ),
 
-    -- Tus filtros exactos
+    /* == Tus filtros exactos de la fila/proyecto == */
        Table_ShipFrom[Id_Cou]  = "HN"
     && Table_ShipTo[Id_ShippD] = "HN"
     && RIGHT ( Struct_MatMst[Id_Mat], 2 ) = "20"
