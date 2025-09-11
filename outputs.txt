@@ -1,26 +1,37 @@
 --------------------------------------------------------------Advance Editor Chat ProRateo
-MM_Flat_FY :=
-VAR Base =
-    SUMMARIZECOLUMNS(
-        'Table_Dates'[Fiscal Year],
-        'Table_Dates'[Fiscal Month],
-        Table_ShipFrom[Id_Cou],           -- From (texto)
-        Table_ShipTo[Id_ShippD],          -- To (texto)
-        Struct_MatMst[XIPRDC],            -- SKU (numérico)
-        DataBase_SalesData[XHPRCL],       -- Price List (texto)
-        -- agrega si lo necesitás:
-        -- DataBase_SalesData[XICONT],    -- Container (numérico)
-        -- DataBase_SalesData[XHCSNO],    -- Customer ID (numérico)
-        "MM", [Parameter MM]              -- Agregado al mes fiscal
-    )
+MyTable =
+VAR _CatSel = SELECTEDVALUE ( Table_MatCat[Material Category], "Pet Food" )
+VAR _VolSel = SELECTEDVALUE ( Table_VolumeType[Volume Type], "TM Facturado" )
 RETURN
-ADDCOLUMNS(
-    Base,
-    "FY_MonthKey", 'Table_Dates'[Fiscal Year]*100 + 'Table_Dates'[Fiscal Month]
+ADDCOLUMNS (
+    SUMMARIZECOLUMNS (
+        'Date'[Fiscal Year],
+        'Date'[Month Desc],
+        'Geo'[Ship From],
+        'Geo'[Ship To],
+        'Customer'[Segment],
+        'Customer'[Id],
+        'Customer'[Name],
+        'Product'[Material Category],
+        'Product'[Product Id]
+        -- agrega aquí las mismas columnas que ve la visual
+    ),
+    "Parameter mm",
+        CALCULATE ( [Parameter MM],
+            KEEPFILTERS ( 'Product'[Material Category] = _CatSel ),
+            KEEPFILTERS ( 'Table_VolumeType'[Volume Type] = _VolSel )
+        ),
+    "TT Mrgn E2E Log",
+        CALCULATE ( [TT Mrgn E2E Log],
+            KEEPFILTERS ( 'Product'[Material Category] = _CatSel ),
+            KEEPFILTERS ( 'Table_VolumeType'[Volume Type] = _VolSel )
+        ),
+    "COGS",
+        CALCULATE ( [COGS],
+            KEEPFILTERS ( 'Product'[Material Category] = _CatSel ),
+            KEEPFILTERS ( 'Table_VolumeType'[Volume Type] = _VolSel )
+        )
 )
-
-FY_MonthKey =
-'Table_Dates'[Fiscal Year] * 100 + 'Table_Dates'[Fiscal Month]
 
 
 
