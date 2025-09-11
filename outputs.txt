@@ -1,37 +1,53 @@
 --------------------------------------------------------------Advance Editor Chat ProRateo
-MyTable =
-VAR _CatSel = SELECTEDVALUE ( Table_MatCat[Material Category], "Pet Food" )
-VAR _VolSel = SELECTEDVALUE ( Table_VolumeType[Volume Type], "TM Facturado" )
+02 Project (30LPS per unit in Pet Master 20kg ) =
+VAR _CatSel =
+    SELECTEDVALUE ( Table_MatCat[Material Category], "Pet Food" )        -- valor explícito del slicer
+VAR _VolSel =
+    SELECTEDVALUE ( Table_VolumeType[Volume Type], "TM Facturado" )      -- si tus medidas lo usan
 RETURN
-ADDCOLUMNS (
-    SUMMARIZECOLUMNS (
-        'Date'[Fiscal Year],
-        'Date'[Month Desc],
-        'Geo'[Ship From],
-        'Geo'[Ship To],
-        'Customer'[Segment],
-        'Customer'[Id],
-        'Customer'[Name],
-        'Product'[Material Category],
-        'Product'[Product Id]
-        -- agrega aquí las mismas columnas que ve la visual
+FILTER (
+    ADDCOLUMNS (
+        SUMMARIZECOLUMNS (
+            DataBase_SalesData[FY],
+            DataBase_SalesData[FY_Month],
+            DataBase_SalesData[XHPRCL],
+            Struct_CusMst[CUST_NUM],
+            Struct_MatMst[Id_Mat],
+            Table_ShipFrom[Id_Cou],
+            Table_ShipTo[Id_ShippD],
+            Struct_CusMst[SEGM_CODE]
+        ),
+        "COGS",
+            CALCULATE (
+                [TT Cst E2E V2.1],
+                KEEPFILTERS ( Table_MatCat[Material Category] = _CatSel ),
+                KEEPFILTERS ( Table_VolumeType[Volume Type] = _VolSel )
+            ),
+        "TT Mrgn E2E Log",
+            CALCULATE (
+                [TT Mrgn E2E Log],
+                KEEPFILTERS ( Table_MatCat[Material Category] = _CatSel ),
+                KEEPFILTERS ( Table_VolumeType[Volume Type] = _VolSel )
+            ),
+        "Parameter mm",
+            CALCULATE (
+                [Parameter MM],
+                KEEPFILTERS ( Table_MatCat[Material Category] = _CatSel )
+            ),
+        "Project ID", 2,
+        "Project Name", "30LPS per unit in Pet Master 20kg",
+        "Target", 0
     ),
-    "Parameter mm",
-        CALCULATE ( [Parameter MM],
-            KEEPFILTERS ( 'Product'[Material Category] = _CatSel ),
-            KEEPFILTERS ( 'Table_VolumeType'[Volume Type] = _VolSel )
-        ),
-    "TT Mrgn E2E Log",
-        CALCULATE ( [TT Mrgn E2E Log],
-            KEEPFILTERS ( 'Product'[Material Category] = _CatSel ),
-            KEEPFILTERS ( 'Table_VolumeType'[Volume Type] = _VolSel )
-        ),
-    "COGS",
-        CALCULATE ( [COGS],
-            KEEPFILTERS ( 'Product'[Material Category] = _CatSel ),
-            KEEPFILTERS ( 'Table_VolumeType'[Volume Type] = _VolSel )
-        )
+    -- == FILTROS EXACTOS QUE USAS HOY ==
+      Table_ShipFrom[Id_Cou] = "HN"
+  &&  Table_ShipTo[Id_ShippD] = "HN"
+  &&  RIGHT ( Struct_MatMst[Id_Mat], 2 ) = "20"
+  &&  LEFT  ( Struct_MatMst[Id_Mat], 4 ) = "7347"
+  &&  DataBase_SalesData[FY] = "FY26"
+  &&  DataBase_SalesData[FY_Month] = "FY26_JUL"
+  &&  Struct_CusMst[CUST_NUM] = "356"
 )
+
 
 
 
