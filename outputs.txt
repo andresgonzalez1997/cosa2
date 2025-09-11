@@ -1,15 +1,23 @@
 --------------------------------------------------------------Advance Editor Chat ProRateo
 02 Project (30LPS per unit in Pet Master 20kg ) =
-VAR BaseFiltered =
+VAR _VolSel  = SELECTEDVALUE ( Table_VolumeType[Volume Type], "TM Facturado" )
+VAR _CostSel = SELECTEDVALUE ( Table_CostType[Cost Type], "FIFO" )
+VAR _CatSel  = SELECTEDVALUE ( Table_MatCat[Material Category], "Pet Food" )
+
+-- Limitar la base ANTES de resumir
+VAR BaseFiltered :=
     FILTER (
         DataBase_SalesData,
             DataBase_SalesData[FY] = "FY26"
         &&  DataBase_SalesData[FY_Month] = "FY26_JUL"
         &&  DataBase_SalesData[XHPRCL] IN { "1", "2", "11", "14", "25" }
     )
-VAR Result =
+
+RETURN
+FILTER (
     ADDCOLUMNS (
         SUMMARIZECOLUMNS (
+            -- Granularidad de la visual
             DataBase_SalesData[FY],
             DataBase_SalesData[FY_Month],
             DataBase_SalesData[XHPRCL],
@@ -18,27 +26,47 @@ VAR Result =
             Table_ShipFrom[Id_Cou],
             Table_ShipTo[Id_ShippD],
             Struct_CusMst[SEGM_CODE],
-            BaseFiltered
+
+            -- Tabla filtrada para reducir filas
+            BaseFiltered,
+
+            -- ⬇️ Inyectar los “slicers” como filtros REALES del contexto
+            TREATAS ( { _VolSel },  Table_VolumeType[Volume Type] ),
+            TREATAS ( { _CostSel }, Table_CostType[Cost Type] ),
+            TREATAS ( { _CatSel },  Table_MatCat[Material Category] )
         ),
+
+        /* ========= MEDIDAS ========= */
         "COGS",
-            CALCULATE ( [TT Cst E2E V2.1] ),
+            CALCULATE ( [TT Cst E2E V2.1] ),             -- ya ve _VolSel/_CostSel/_CatSel por TREATAS
         "TT Mrgn E2E Log",
-            CALCULATE ( [TT Mrgn E2E Log] ),
+            CALCULATE (
+                [TT Mrgn E2E Log]
+                -- si en la página quitás “Credit Memo” y “Logistic COGS”, fuerza igual aquí:
+                -- , KEEPFILTERS ( NOT ( 'Cost'[Cost Type] IN { "Credit Memo", "Logistic COGS" } ) )
+            ),
         "Parameter mm",
             CALCULATE ( [Parameter MM] ),
-        "Project ID", 2,
+
+        /* ========= META ========= */
+        "Project ID",   2,
         "Project Name", "30LPS per unit in Pet Master 20kg",
-        "Target", 0
-    )
-RETURN
-    FILTER (
-        Result,
-            Table_ShipFrom[Id_Cou] = "HN"
-        &&  Table_ShipTo[Id_ShippD] = "HN"
-        &&  RIGHT ( Struct_MatMst[Id_Mat], 2 ) = "20"
-        &&  LEFT  ( Struct_MatMst[Id_Mat], 4 ) = "7347"
-        &&  Struct_CusMst[CUST_NUM] = "356"
-    )
+        "Target",       0,
+
+        /* ========= DIAGNÓSTICO (puedes borrar luego) ========= */
+        "Check Vol", SELECTEDVALUE ( Table_VolumeType[Volume Type], "(blank)" ),
+        "Check Cost", SELECTEDVALUE ( Table_CostType[Cost Type], "(blank)" ),
+        "Check Cat", SELECTEDVALUE ( Table_MatCat[Material Category], "(blank)" )
+    ),
+
+    -- Tus filtros exactos
+       Table_ShipFrom[Id_Cou]  = "HN"
+    && Table_ShipTo[Id_ShippD] = "HN"
+    && RIGHT ( Struct_MatMst[Id_Mat], 2 ) = "20"
+    && LEFT  ( Struct_MatMst[Id_Mat], 4 ) = "7347"
+    && Struct_CusMst[CUST_NUM] = "356"
+)
+
 
 
 
