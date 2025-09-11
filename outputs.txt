@@ -1,11 +1,13 @@
 --------------------------------------------------------------Advance Editor Chat ProRateo
 02 Project (30LPS per unit in Pet Master 20kg ) =
-VAR _CatSel =
-    SELECTEDVALUE ( Table_MatCat[Material Category], "Pet Food" )        -- valor explícito del slicer
-VAR _VolSel =
-    SELECTEDVALUE ( Table_VolumeType[Volume Type], "TM Facturado" )      -- si tus medidas lo usan
-RETURN
-FILTER (
+VAR BaseFiltered =
+    FILTER (
+        DataBase_SalesData,
+            DataBase_SalesData[FY] = "FY26"
+        &&  DataBase_SalesData[FY_Month] = "FY26_JUL"
+        &&  DataBase_SalesData[XHPRCL] IN { "1", "2", "11", "14", "25" }
+    )
+VAR Result =
     ADDCOLUMNS (
         SUMMARIZECOLUMNS (
             DataBase_SalesData[FY],
@@ -15,38 +17,29 @@ FILTER (
             Struct_MatMst[Id_Mat],
             Table_ShipFrom[Id_Cou],
             Table_ShipTo[Id_ShippD],
-            Struct_CusMst[SEGM_CODE]
+            Struct_CusMst[SEGM_CODE],
+            BaseFiltered
         ),
         "COGS",
-            CALCULATE (
-                [TT Cst E2E V2.1],
-                KEEPFILTERS ( Table_MatCat[Material Category] = _CatSel ),
-                KEEPFILTERS ( Table_VolumeType[Volume Type] = _VolSel )
-            ),
+            CALCULATE ( [TT Cst E2E V2.1] ),
         "TT Mrgn E2E Log",
-            CALCULATE (
-                [TT Mrgn E2E Log],
-                KEEPFILTERS ( Table_MatCat[Material Category] = _CatSel ),
-                KEEPFILTERS ( Table_VolumeType[Volume Type] = _VolSel )
-            ),
+            CALCULATE ( [TT Mrgn E2E Log] ),
         "Parameter mm",
-            CALCULATE (
-                [Parameter MM],
-                KEEPFILTERS ( Table_MatCat[Material Category] = _CatSel )
-            ),
+            CALCULATE ( [Parameter MM] ),
         "Project ID", 2,
         "Project Name", "30LPS per unit in Pet Master 20kg",
         "Target", 0
-    ),
-    -- == FILTROS EXACTOS QUE USAS HOY ==
-      Table_ShipFrom[Id_Cou] = "HN"
-  &&  Table_ShipTo[Id_ShippD] = "HN"
-  &&  RIGHT ( Struct_MatMst[Id_Mat], 2 ) = "20"
-  &&  LEFT  ( Struct_MatMst[Id_Mat], 4 ) = "7347"
-  &&  DataBase_SalesData[FY] = "FY26"
-  &&  DataBase_SalesData[FY_Month] = "FY26_JUL"
-  &&  Struct_CusMst[CUST_NUM] = "356"
-)
+    )
+RETURN
+    FILTER (
+        Result,
+            Table_ShipFrom[Id_Cou] = "HN"
+        &&  Table_ShipTo[Id_ShippD] = "HN"
+        &&  RIGHT ( Struct_MatMst[Id_Mat], 2 ) = "20"
+        &&  LEFT  ( Struct_MatMst[Id_Mat], 4 ) = "7347"
+        &&  Struct_CusMst[CUST_NUM] = "356"
+    )
+
 
 
 
