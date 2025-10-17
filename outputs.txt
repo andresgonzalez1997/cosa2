@@ -1,213 +1,431 @@
-let
-    Source = Odbc.Query("host=Drona-impala.cargill.com;port=21050;driver={Cloudera ODBC Driver for Impala};usesystemtruststore=1;ssl=1;checkcertrevocation=0;authmech=1;usenativequery=1", "SELECT#(lf)  /* ===== NUEVAS COLUMNAS DESDE CREDIT NOTES ===== */#(lf)  CASE#(lf)    WHEN cn.rebate_flag = 2 THEN 'ESPECIFICO'#(lf)    WHEN cn.rebate_flag = 1 THEN 'GENERICO'#(lf)    ELSE 'GENERICO'#(lf)  END AS ""rebate_clasification"",#(lf)  COALESCE(cn.cn_total_discount, 0) AS ""cn_total_discount"",#(lf)  -- Nº de filas NIS en el mismo bucket (5 llaves + mes_año)#(lf)    COUNT(*) OVER (#(lf)      PARTITION BY#(lf)        CAST(f.xhcsno AS BIGINT), -- cliente#(lf)        UPPER(TRIM(CAST(f.xiprdc AS STRING))), -- code#(lf)        UPPER(TRIM(CAST(f.xiprsc AS STRING))), -- sub_code#(lf)        UPPER(TRIM(CAST(f.xifrmc AS STRING))), -- form#(lf)        UPPER(TRIM(CAST(f.xiloc2 AS STRING))), -- localidad#(lf)        CONCAT( -- mes_año (igual que en el JOIN)#(lf)          CAST(CAST(SUBSTR(f.fechaa, 4, 2) AS DOUBLE) AS STRING),#(lf)          '_',#(lf)          CAST(CONCAT('20', SUBSTR(f.fechaa, 2, 2)) AS STRING)#(lf)        )#(lf)    ) AS cn_rows_in_bucket,#(lf)    -- Monto de CN mensual prorrateado en partes iguales por fila (SOLO para ESPECIFICO)#(lf)    CASE#(lf)      WHEN cn.rebate_flag = 2 THEN COALESCE(cn.cn_total_discount, 0) / NULLIF(#(lf)        COUNT(*) OVER (#(lf)          PARTITION BY#(lf)            CAST(f.xhcsno AS BIGINT),#(lf)            UPPER(TRIM(CAST(f.xiprdc AS STRING))),#(lf)            UPPER(TRIM(CAST(f.xiprsc AS STRING))),#(lf)            UPPER(TRIM(CAST(f.xifrmc AS STRING))),#(lf)            UPPER(TRIM(CAST(f.xiloc2 AS STRING))),#(lf)            CONCAT(#(lf)              CAST(CAST(SUBSTR(f.fechaa, 4, 2) AS DOUBLE) AS STRING),#(lf)              '_',#(lf)              CAST(CONCAT('20', SUBSTR(f.fechaa, 2, 2)) AS STRING)#(lf)            )#(lf)        ),#(lf)        0#(lf)        )#(lf)      ELSE 0#(lf)    END AS cn_total_discount_per_row,#(lf)  CAST(f.xmccod AS INT) AS ""credit_terms"",#(lf)  CAST(f.cmcuat AS INT) AS ""customer_acctg_type"",#(lf)  CAST(f.xiloc2 AS INT) AS ""location"",#(lf)  CAST(TRIM(f.lclabb) AS STRING) AS ""Location Name"",#(lf)  CAST(f.xionum AS INT) AS ""Order Number"",#(lf)  CAST(f.xhotyp AS STRING) AS ""Order Type"",#(lf)  CAST(f.xhcsno AS INT) AS ""Customer Number"",#(lf)  CAST(TRIM(f.cmcsnm) AS STRING) AS ""Customer Name"",#(lf)  Customer.SEGMENTO2 AS ""Segment"",#(lf)  CAST(TRIM(f.k7a202) AS STRING) AS ""customer_segment"",#(lf)  CAST(TRIM(f.xiprdc) AS STRING) AS ""Product Code"",#(lf)  CAST(TRIM(f.xiprsc) AS STRING) AS ""Sub Code"",#(lf)  CAST(TRIM(f.xifrmc) AS STRING) AS ""Form Code"",#(lf)  CAST(TRIM(f.xicont) AS STRING) AS ""Container Code"",#(lf)  CAST(TRIM(f.xiprds) AS STRING) AS ""Product Name"",#(lf)  CAST(TRIM(f.xmplin) AS STRING) AS ""Product Line Code"",#(lf)  CAST(TRIM(f.dpprld) AS STRING) AS ""Product Line Code Name"",#(lf)  CAST(TRIM(f.dgplgp) AS STRING) AS ""Product Line Group"",#(lf)  CAST(TRIM(f.dgplgd) AS STRING) AS ""Product Line Group Name"",#(lf)  CAST(TRIM(f.xcdist) AS STRING) AS ""District"",#(lf)  CAST(TRIM(f.xhtcc) AS STRING) AS ""Currency"",#(lf)  CAST(TRIM(f.xhcrr) AS STRING) AS ""Exchange Rate"",#(lf)  CAST(f.xibgbl AS INT) AS ""Bag/Bulk"",#(lf)  CAST(f.xiqtsh AS DOUBLE) AS ""Qty Shipped"",#(lf)  CAST(f.xiwext AS DOUBLE) AS ""Weight Extended"",#(lf)  (#(lf)    CAST(f.xiqtsh AS DOUBLE) * CAST(f.cnusiz AS DOUBLE)#(lf)  ) / 1000 AS ""Tons Shipped"",#(lf)  CAST(f.mtonsold AS DOUBLE) AS ""Volume (MT)"",#(lf)  CAST(f.xiqtsa AS DOUBLE) AS ""Tons Invoiced"",#(lf)  CAST(f.xifdin AS DOUBLE) AS ""Feed/Ing Flag"",#(lf)  CAST(f.xdescd AS DOUBLE) AS ""Discount Detail"",#(lf)  CAST(f.xdesch AS DOUBLE) AS ""Discount Header"",#(lf)  CAST(f.xdescp AS DOUBLE) AS ""Discount Promo Charge"",#(lf)  CAST(f.xiuprc AS DOUBLE) AS ""Unit Price"",#(lf)  CAST(f.xiuprf AS DOUBLE) AS ""Unit Price F"",#(lf)  CAST(f.xieprc AS DOUBLE) AS ""Extended Price"",#(lf)  CAST(f.xieprf AS DOUBLE) AS ""$ Sales"",#(lf)  CAST(f.xiucos AS DOUBLE) AS ""Extended Cost"",#(lf)  CAST(f.xiucof AS DOUBLE) AS ""Extended Cost F"",#(lf)  CAST(f.xzucos AS DOUBLE) AS ""Extended Real Cost"",#(lf)  CAST(f.xzucof AS DOUBLE) AS ""Extended Real Cost F"",#(lf)  CAST(f.xicsun AS DOUBLE) AS ""Costing Unit T/U"",#(lf)  f.xmtrmg AS ""Territory Manager"",#(lf)  f.xmslrc AS ""Sales Rep"",#(lf)  f.cnusiz AS ""CNUSIZ"",#(lf)  FROM_UNIXTIME (#(lf)    UNIX_TIMESTAMP (#(lf)      CONCAT (#(lf)        SUBSTR (fechaa, 6, 2),#(lf)        '/',#(lf)        SUBSTR (fechaa, 4, 2),#(lf)        '/',#(lf)        '20',#(lf)        SUBSTR (fechaa, 2, 2),#(lf)        ' 00:00:00'#(lf)      ),#(lf)      'dd/MM/yyyy HH:mm:ss'#(lf)    )#(lf)  ) AS ""Date"",#(lf)  CONCAT (f.pais, '_', f.xiloc2) AS ""Country_Loc"",#(lf)  CONCAT (f.pais, '_', f.xhcsno) AS ""Country_Client"",#(lf)  CONCAT (f.xiprdc, ' ', f.xifrmc, f.xicont) AS ""Index"",#(lf)  CONCAT (f.pais, '_', f.xiprdc, ' ', f.xifrmc, f.xicont) AS ""Country_SKU"",#(lf)  CONCAT (#(lf)    SUBSTR (f.ohasdt, 6, 2),#(lf)    '-',#(lf)    SUBSTR (f.ohasdt, 4, 2),#(lf)    '-',#(lf)    '20',#(lf)    SUBSTR (f.ohasdt, 2, 2)#(lf)  ) AS ""Actual Shp. Date"",#(lf)  f.fechaa AS ""z.Date2B"",#(lf)  f.ohasdt AS ""z.actual_Shp_date"",#(lf)  f.pais AS ""z.Pais"",#(lf)  f.fechaa AS ""z.fechaa"",#(lf)  f.xhprcl AS ""z.xhprcl"",#(lf)  f.ohldoc AS ""ohldoc"",#(lf)  f.ohcmri AS ""z.ohcmri"",#(lf)  CASE#(lf)    WHEN f.xicont = 'AP' THEN '25'#(lf)    WHEN f.xicont = 'AX' THEN '25'#(lf)    WHEN f.xicont = 'X   ' THEN 'X'#(lf)    WHEN f.xicont = 'KG' THEN '1'#(lf)    WHEN f.xicont = '01KG' THEN '1'#(lf)    WHEN f.xicont = '20KG' THEN '20'#(lf)    WHEN f.xicont = '25KG' THEN '25'#(lf)    ELSE '1'#(lf)  END AS ""UOM"",#(lf)  CASE#(lf)    WHEN f.xicont = 'X   ' THEN CAST(f.xiuprc AS DOUBLE)#(lf)    WHEN f.xicont = 'AP' THEN CAST(f.xiuprc AS DOUBLE) * 40#(lf)    WHEN f.xicont = 'AX' THEN CAST(f.xiuprc AS DOUBLE) * 40#(lf)    WHEN f.xicont = '25KG' THEN CAST(f.xiuprc AS DOUBLE) * 40#(lf)    WHEN f.xicont = '20KG' THEN CAST(f.xiuprc AS DOUBLE) * 50#(lf)    WHEN f.xicont = 'KG' THEN CAST(f.xiuprc AS DOUBLE) * 1000#(lf)    WHEN f.xicont = '01KG' THEN CAST(f.xiuprc AS DOUBLE) * 1000#(lf)    ELSE 0#(lf)  END AS ""Unit Price (F) Adj."",#(lf)  ABS(#(lf)    CAST(f.xiucos AS DOUBLE) / CAST(f.xiqtsa AS DOUBLE)#(lf)  ) AS ""Unit Cost (F) Adj."",#(lf)  CASE#(lf)    WHEN TRIM(f.xicont) = 'X' THEN CAST(f.xiucos AS DOUBLE)#(lf)    WHEN f.xicont = 'AP' THEN CAST(f.xiucos AS DOUBLE) / 40#(lf)    WHEN f.xicont = 'AX' THEN CAST(f.xiucos AS DOUBLE) / 40#(lf)    WHEN TRIM(f.xicont) = '25KG' THEN CAST(f.xiucos AS DOUBLE) / 40#(lf)    WHEN TRIM(f.xicont) = '20KG' THEN CAST(f.xiucos AS DOUBLE) / 50#(lf)    WHEN TRIM(f.xicont) = 'KG' THEN CAST(f.xiucos AS DOUBLE) / 1000#(lf)    WHEN TRIM(f.xicont) = '01KG' THEN CAST(f.xiucos AS DOUBLE) / 1000#(lf)    ELSE 0#(lf)  END AS ""Extended Cost (F) Adj."",#(lf)  (#(lf)    CAST(f.xdescd AS DOUBLE) + CAST(f.xdesch AS DOUBLE) + CAST(f.xdescp AS DOUBLE)#(lf)  ) AS ""$ Discount"",#(lf)  Customer.Holding_Group_Of AS ""GROUP"",#(lf)  (#(lf)    CAST(f.xieprc AS DOUBLE) - (#(lf)      CAST(f.xdescd AS DOUBLE) + CAST(f.xdesch AS DOUBLE) + CAST(f.xdescp AS DOUBLE)#(lf)    )#(lf)  ) / 1000 AS ""Net revenue KUS"",#(lf)  (#(lf)    CAST(#(lf)      (#(lf)        CASE#(lf)          WHEN TRIM(f.xicont) = 'X' THEN CAST(f.xiucos AS DOUBLE)#(lf)          WHEN f.xicont = 'AP' THEN CAST(f.xiucos AS DOUBLE) / 40#(lf)          WHEN f.xicont = 'AX' THEN CAST(f.xiucos AS DOUBLE) / 40#(lf)          WHEN TRIM(f.xicont) = '25KG' THEN CAST(f.xiucos AS DOUBLE) / 40#(lf)          WHEN TRIM(f.xicont) = '20KG' THEN CAST(f.xiucos AS DOUBLE) / 50#(lf)          WHEN TRIM(f.xicont) = 'KG' THEN CAST(f.xiucos AS DOUBLE) / 1000#(lf)          WHEN TRIM(f.xicont) = '01KG' THEN CAST(f.xiucos AS DOUBLE) / 1000#(lf)          ELSE 0#(lf)        END#(lf)      ) AS DOUBLE#(lf)    ) / 1000#(lf)  ) AS ""Cost"",#(lf)  CAST(#(lf)    (#(lf)      CASE#(lf)        WHEN SUBSTR (fechaa, 4, 2) IN ('10', '11', '12', '06', '07', '08', '09') THEN CAST(#(lf)          CAST(CONCAT ('20', SUBSTR (fechaa, 2, 2)) AS DOUBLE) + 1 AS STRING#(lf)        )#(lf)        ELSE CONCAT ('20', SUBSTR (fechaa, 2, 2))#(lf)      END#(lf)    ) AS INT#(lf)  ) AS fiscal_year,#(lf)  CASE#(lf)    WHEN SUBSTR (fechaa, 4, 2) IN ('10', '11', '12', '06', '07', '08', '09') THEN CONCAT (#(lf)      'FY',#(lf)      CAST(#(lf)        CAST(SUBSTR (fechaa, 2, 2) AS DOUBLE) + 1 AS STRING#(lf)      )#(lf)    )#(lf)    ELSE CONCAT ('FY', SUBSTR (fechaa, 2, 2))#(lf)  END AS ""YEAR"",#(lf)  CONCAT (TRIM(f.xiprdc), TRIM(f.xiprsc)) AS ""SKU Code"",#(lf)  CONCAT (#(lf)    (#(lf)      CASE#(lf)        WHEN SUBSTR (fechaa, 4, 2) IN ('10', '11', '12', '06', '07', '08', '09') THEN CONCAT (#(lf)          'FY',#(lf)          CAST(#(lf)            CAST(SUBSTR (fechaa, 2, 2) AS DOUBLE) + 1 AS STRING#(lf)          )#(lf)        )#(lf)        ELSE CONCAT ('FY', SUBSTR (fechaa, 2, 2))#(lf)      END#(lf)    ),#(lf)    CAST(f.xhcsno AS STRING)#(lf)  ) AS ""Profitability"",#(lf)  CONCAT (TRIM(f.xiprdc), '_', TRIM(f.xiprsc)) AS ""SKU.Code"",#(lf)  CAST(CAST(SUBSTR (fechaa, 4, 2) AS DOUBLE) AS INT) AS ""Month"",#(lf)  CAST(CONCAT ('20', SUBSTR (fechaa, 2, 2)) AS INT) AS ""Year_Num"",#(lf)  CAST(CAST(SUBSTR (fechaa, 4, 2) AS DOUBLE) AS STRING) AS ""Month_num"",#(lf)  CONCAT (#(lf)    CAST(CAST(SUBSTR (fechaa, 4, 2) AS DOUBLE) AS STRING),#(lf)    '_',#(lf)    CAST(CONCAT ('20', SUBSTR (fechaa, 2, 2)) AS STRING)#(lf)  ) AS ""Month_Year_Nat"",#(lf)  m.size_mm,#(lf)  m.form,#(lf)  m.stage,#(lf)  CASE#(lf)    WHEN f.xcdist = '110' THEN 'FKT'#(lf)    WHEN f.xcdist = '111' THEN 'DURAN'#(lf)    WHEN f.xcdist = '121' THEN 'GYE'#(lf)    ELSE 'Distrito NO identificado'#(lf)  END AS ""planta"",#(lf)  m.`Stage + Form` AS ""stage + form"",#(lf)  m.Protein,#(lf)  y.type_transport,#(lf)  y.Delivery_Point,#(lf)  y.location_id,#(lf)  y.`¨Province` AS ""province"",#(lf)  CASE#(lf)    WHEN Customer.Holding_Group_Of IN ('EMPAGRAN', 'Logistica', 'INTERCOMPANY') THEN 'NA'#(lf)    ELSE y.type_transport#(lf)  END AS ""Transportation type"",#(lf)  CASE#(lf)    WHEN Customer.Holding_Group_Of IN ('EMPAGRAN', 'Logistica', 'INTERCOMPANY') THEN 'NA'#(lf)    ELSE y.Delivery_Point#(lf)  END AS ""Main delivery Point""#(lf)FROM#(lf)  dev_internal_anh_customer_profitability.nis_filtered_segments_vw AS f#(lf)  LEFT JOIN (#(lf)    SELECT#(lf)      NEW_CUSTOMER.Codigo AS Codigo,#(lf)      TRIM(NEW_CUSTOMER.SEGMENTO_2) AS SEGMENTO2,#(lf)      TRIM(NEW_CUSTOMER.grupo_holding) AS Holding_Group_Of#(lf)    FROM#(lf)      (#(lf)        SELECT#(lf)          t.*,#(lf)          CASE#(lf)            WHEN t.responsable = 'FINANZAS' THEN 'Finanzas'#(lf)            WHEN t.responsable = 'ADMINISTRACION' THEN 'Adm.'#(lf)            WHEN t.responsable = 'SERVICIOS GENERALES' THEN 'Servicios Generales'#(lf)            WHEN t.responsable = 'RMS' THEN 'RMS'#(lf)            WHEN t.responsable = 'LOGISTICA' THEN 'Logistica'#(lf)            WHEN t.responsable = t.estructura#(lf)            AND LENGTH (t.responsable) > 3 THEN t.estructura#(lf)            WHEN t.Segmentation_Cargill_Segment = 'KOBE - STRATEGIC' THEN 'Kobe Strategic'#(lf)            WHEN t.Segmentation_Cargill_Segment = 'NOAH - CLASSIC' THEN 'Noah Classic'#(lf)            WHEN t.Segmentation_Cargill_Segment = 'NOAH - BASE' THEN 'Noah Base'#(lf)            WHEN t.Segmentation_Cargill_Segment = 'NOAH - STRATEGIC' THEN 'Noah Strategic'#(lf)            WHEN t.Segmentation_Cargill_Segment = 'KOBE - CLASSIC' THEN 'Kobe Classic'#(lf)            WHEN t.Segmentation_Cargill_Segment = 'DENNIS' THEN 'Dennis'#(lf)            WHEN TRIM(t.Segmentation_Cargill_Segment) IS NULL THEN 'Noah Base'#(lf)            ELSE 'FALTA'#(lf)          END AS SEGMENTO_2#(lf)        FROM#(lf)          (#(lf)            SELECT#(lf)              l.*,#(lf)              ec.grupo_holding AS Segmentation_Holding,#(lf)              ec.group_id AS Segmentation_Group,#(lf)              ec.cargill_segment AS Segmentation_Cargill_Segment#(lf)            FROM#(lf)              dev_internal_anh_customer_profitability.tb_listado_codigo_clientes_new l#(lf)              LEFT JOIN dev_internal_anh_customer_profitability.tb_ec_customer_segmentation ec ON l.group_id = ec.group_id#(lf)          ) AS t#(lf)      ) AS NEW_CUSTOMER#(lf)    GROUP BY#(lf)      1,2,3#(lf)  ) AS Customer ON f.xhcsno = Customer.Codigo#(lf)  LEFT JOIN (#(lf)    SELECT#(lf)      TRIM(t.code_sku) AS full_code,#(lf)      CASE#(lf)        WHEN CAST(TRIM(t.caliber_sku) AS STRING) = 'NaN' THEN '0'#(lf)        ELSE CAST(TRIM(t.caliber_sku) AS STRING)#(lf)      END AS size_mm,#(lf)      CASE#(lf)        WHEN CAST(TRIM(t.protein_sku) AS STRING) = 'NaN' THEN '0'#(lf)        ELSE CAST(TRIM(t.protein_sku) AS STRING)#(lf)      END AS number_protein,#(lf)      TRIM(t.form_sku) AS form,#(lf)      TRIM(t.stage_sku) AS stage,#(lf)      TRIM(t.name_plant) AS planta,#(lf)      CONCAT (TRIM(t.stage_sku), ' ', TRIM(t.form_sku)) AS `Stage + Form`,#(lf)      CASE#(lf)        WHEN t.protein_sku IS NULL#(lf)        OR TRIM(t.protein_sku) = ''#(lf)        OR LOWER(TRIM(t.protein_sku)) = 'nan' THEN NULL#(lf)        ELSE TRIM(t.protein_sku)#(lf)      END AS Protein#(lf)    FROM#(lf)      dev_internal_anh_customer_profitability.tb_new_material_master AS t#(lf)  ) AS m ON CONCAT (TRIM(f.xiprdc), TRIM(f.xiprsc)) = TRIM(m.full_code)#(lf)  LEFT JOIN (#(lf)    SELECT#(lf)      TRIM(s.type_transport) AS type_transport,#(lf)      TRIM(s.delivery_point) AS Delivery_Point,#(lf)      CAST(TRIM(s.location_) AS STRING) AS location_id,#(lf)      TRIM(s.od) AS Od,#(lf)      CAST(TRIM(s.code_customer) AS STRING) AS code_customer,#(lf)      TRIM(s.province) AS `¨Province`#(lf)    FROM#(lf)      dev_internal_anh_customer_profitability.tb_cost_to_serve AS s#(lf)    GROUP BY#(lf)      1,2,3,4,5,6#(lf)  ) AS y ON TRIM(f.xhcsno) = y.code_customer#(lf)  AND TRIM(f.xionum) = y.Od#(lf)  AND TRIM(f.xiloc2) = y.location_id#(lf)  /* ===== JOIN A CREDIT NOTES (5 LLAVES + MES_AÑO) ===== */#(lf)  LEFT JOIN (#(lf)    SELECT#(lf)      CAST(numero_cliente AS BIGINT) AS cliente_id,#(lf)      UPPER(TRIM(CAST(codigo AS STRING))) AS code,#(lf)      UPPER(#(lf)        CASE#(lf)          WHEN sub_codigo IS NULL THEN ''#(lf)          WHEN LOWER(TRIM(CAST(sub_codigo AS STRING))) IN ('nan', 'null', 'na', '-', '.') THEN ''#(lf)          ELSE TRIM(CAST(sub_codigo AS STRING))#(lf)        END#(lf)      ) AS sub_code,#(lf)      UPPER(#(lf)        CASE#(lf)          WHEN forma IS NULL THEN ''#(lf)          WHEN LOWER(TRIM(CAST(forma AS STRING))) IN ('nan', 'null', 'na', '-', '.') THEN ''#(lf)          ELSE TRIM(CAST(forma AS STRING))#(lf)        END#(lf)      ) AS form,#(lf)      UPPER(#(lf)        CASE#(lf)          WHEN localidad IS NULL THEN ''#(lf)          WHEN LOWER(TRIM(CAST(localidad AS STRING))) IN ('nan', 'null', 'na', '-', '.') THEN ''#(lf)          ELSE TRIM(CAST(localidad AS STRING))#(lf)        END#(lf)      ) AS localidad,#(lf)      CONCAT (#(lf)        CAST(MONTH (fecha_corregida) AS STRING),#(lf)        '_',#(lf)        CAST(YEAR (fecha_corregida) AS STRING)#(lf)      ) AS mes_año,#(lf)      MAX(#(lf)        CASE#(lf)          WHEN UPPER(TRIM(rebate)) = 'ESPECIFICO' THEN 2#(lf)          WHEN UPPER(TRIM(rebate)) IN ('GENERICO', 'GENÉRICO') THEN 1#(lf)          ELSE 0#(lf)        END#(lf)      ) AS rebate_flag,#(lf)      SUM(#(lf)        CASE#(lf)          WHEN UPPER(TRIM(rebate)) = 'ESPECIFICO' THEN CAST(totaldesc AS DOUBLE)#(lf)          ELSE 0#(lf)        END#(lf)      ) AS cn_total_discount#(lf)    FROM#(lf)      (#(lf)        SELECT#(lf)          numero_cliente,#(lf)          codigo,#(lf)          sub_codigo,#(lf)          forma,#(lf)          totaldesc,#(lf)          localidad,#(lf)          rebate,#(lf)          FROM_UNIXTIME (#(lf)            UNIX_TIMESTAMP (#(lf)              CONCAT (#(lf)                SUBSTR (mes_ano, 6, 2),#(lf)                '/',#(lf)                SUBSTR (mes_ano, 4, 2),#(lf)                '/',#(lf)                '20',#(lf)                SUBSTR (mes_ano, 2, 2),#(lf)                ' 00:00:00'#(lf)              ),#(lf)              'dd/MM/yyyy HH:mm:ss'#(lf)            )#(lf)          ) AS fecha_corregida#(lf)        FROM#(lf)          dev_internal_anh_customer_profitability.tb_credit_notes_new#(lf)      ) t#(lf)    GROUP BY#(lf)      1,2,3,4,5,6#(lf)  ) AS cn ON CAST(f.xhcsno AS BIGINT) = cn.cliente_id#(lf)  AND UPPER(TRIM(CAST(f.xiprdc AS STRING))) = cn.code#(lf)  AND UPPER(TRIM(CAST(f.xiprsc AS STRING))) = cn.sub_code#(lf)  AND UPPER(TRIM(CAST(f.xifrmc AS STRING))) = cn.form#(lf)  AND UPPER(TRIM(CAST(f.xiloc2 AS STRING))) = cn.localidad#(lf)  AND CONCAT (#(lf)    CAST(CAST(SUBSTR (f.fechaa, 4, 2) AS DOUBLE) AS STRING),#(lf)    '_',#(lf)    CAST(CONCAT ('20', SUBSTR (f.fechaa, 2, 2)) AS STRING)#(lf)  ) = cn.mes_año#(lf)WHERE#(lf)  f.fechaa >= '1230601'#(lf)  AND FROM_UNIXTIME (#(lf)    UNIX_TIMESTAMP (#(lf)      CONCAT (#(lf)        SUBSTR (f.fechaa, 6, 2),#(lf)        '/',#(lf)        SUBSTR (f.fechaa, 4, 2),#(lf)        '/',#(lf)        '20',#(lf)        SUBSTR (f.fechaa, 2, 2),#(lf)        ' 00:00:00'#(lf)      ),#(lf)      'dd/MM/yyyy HH:mm:ss'#(lf)    )#(lf)  ) <= (#(lf)    CASE#(lf)      WHEN CAST(DAY (NOW ()) AS INT) > 9 THEN LAST_DAY (ADD_MONTHS (NOW (), -1))#(lf)      ELSE LAST_DAY (ADD_MONTHS (NOW (), -2))#(lf)    END#(lf)  )"),
-
-   // TIPOS QUE VIENEN DE SQL
-#"Types SQL extras" =
-    Table.TransformColumnTypes(
-        Source,
-        {
-            {"rebate_clasification", type text},
-            {"cn_total_discount", type number},
-            {"cn_rows_in_bucket", Int64.Type},
-            {"cn_total_discount_per_row", type number},
-            {"month_year_nat", type text}
-        }
+SELECT
+  /* ===== NUEVAS COLUMNAS DESDE CREDIT NOTES ===== */
+  CASE
+    WHEN cn.rebate_flag = 2 THEN 'ESPECIFICO'
+    WHEN cn.rebate_flag = 1 THEN 'GENERICO'
+    ELSE 'GENERICO'
+  END AS "rebate_clasification",
+  COALESCE(cn.cn_total_discount, 0) AS "cn_total_discount",
+  -- Nº de filas NIS en el mismo bucket (5 llaves + mes_año)
+    COUNT(*) OVER (
+      PARTITION BY
+        CAST(f.xhcsno AS BIGINT), -- cliente
+        UPPER(TRIM(CAST(f.xiprdc AS STRING))), -- code
+        UPPER(TRIM(CAST(f.xiprsc AS STRING))), -- sub_code
+        UPPER(TRIM(CAST(f.xifrmc AS STRING))), -- form
+        UPPER(TRIM(CAST(f.xiloc2 AS STRING))), -- localidad
+        CONCAT( -- mes_año (igual que en el JOIN)
+          CAST(CAST(SUBSTR(f.fechaa, 4, 2) AS DOUBLE) AS STRING),
+          '_',
+          CAST(CONCAT('20', SUBSTR(f.fechaa, 2, 2)) AS STRING)
+        )
+    ) AS cn_rows_in_bucket,
+    -- Monto de CN mensual prorrateado en partes iguales por fila (SOLO para ESPECIFICO)
+    CASE
+      WHEN cn.rebate_flag = 2 THEN COALESCE(cn.cn_total_discount, 0) / NULLIF(
+        COUNT(*) OVER (
+          PARTITION BY
+            CAST(f.xhcsno AS BIGINT),
+            UPPER(TRIM(CAST(f.xiprdc AS STRING))),
+            UPPER(TRIM(CAST(f.xiprsc AS STRING))),
+            UPPER(TRIM(CAST(f.xifrmc AS STRING))),
+            UPPER(TRIM(CAST(f.xiloc2 AS STRING))),
+            CONCAT(
+              CAST(CAST(SUBSTR(f.fechaa, 4, 2) AS DOUBLE) AS STRING),
+              '_',
+              CAST(CONCAT('20', SUBSTR(f.fechaa, 2, 2)) AS STRING)
+            )
+        ),
+        0
+        )
+      ELSE 0
+    END AS cn_total_discount_per_row,
+  CAST(f.xmccod AS INT) AS "credit_terms",
+  CAST(f.cmcuat AS INT) AS "customer_acctg_type",
+  CAST(f.xiloc2 AS INT) AS "location",
+  CAST(TRIM(f.lclabb) AS STRING) AS "Location Name",
+  CAST(f.xionum AS INT) AS "Order Number",
+  CAST(f.xhotyp AS STRING) AS "Order Type",
+  CAST(f.xhcsno AS INT) AS "Customer Number",
+  CAST(TRIM(f.cmcsnm) AS STRING) AS "Customer Name",
+  Customer.SEGMENTO2 AS "Segment",
+  CAST(TRIM(f.k7a202) AS STRING) AS "customer_segment",
+  CAST(TRIM(f.xiprdc) AS STRING) AS "Product Code",
+  CAST(TRIM(f.xiprsc) AS STRING) AS "Sub Code",
+  CAST(TRIM(f.xifrmc) AS STRING) AS "Form Code",
+  CAST(TRIM(f.xicont) AS STRING) AS "Container Code",
+  CAST(TRIM(f.xiprds) AS STRING) AS "Product Name",
+  CAST(TRIM(f.xmplin) AS STRING) AS "Product Line Code",
+  CAST(TRIM(f.dpprld) AS STRING) AS "Product Line Code Name",
+  CAST(TRIM(f.dgplgp) AS STRING) AS "Product Line Group",
+  CAST(TRIM(f.dgplgd) AS STRING) AS "Product Line Group Name",
+  CAST(TRIM(f.xcdist) AS STRING) AS "District",
+  CAST(TRIM(f.xhtcc) AS STRING) AS "Currency",
+  CAST(TRIM(f.xhcrr) AS STRING) AS "Exchange Rate",
+  CAST(f.xibgbl AS INT) AS "Bag/Bulk",
+  CAST(f.xiqtsh AS DOUBLE) AS "Qty Shipped",
+  CAST(f.xiwext AS DOUBLE) AS "Weight Extended",
+  (
+    CAST(f.xiqtsh AS DOUBLE) * CAST(f.cnusiz AS DOUBLE)
+  ) / 1000 AS "Tons Shipped",
+  CAST(f.mtonsold AS DOUBLE) AS "Volume (MT)",
+  CAST(f.xiqtsa AS DOUBLE) AS "Tons Invoiced",
+  CAST(f.xifdin AS DOUBLE) AS "Feed/Ing Flag",
+  CAST(f.xdescd AS DOUBLE) AS "Discount Detail",
+  CAST(f.xdesch AS DOUBLE) AS "Discount Header",
+  CAST(f.xdescp AS DOUBLE) AS "Discount Promo Charge",
+  CAST(f.xiuprc AS DOUBLE) AS "Unit Price",
+  CAST(f.xiuprf AS DOUBLE) AS "Unit Price F",
+  CAST(f.xieprc AS DOUBLE) AS "Extended Price",
+  CAST(f.xieprf AS DOUBLE) AS "$ Sales",
+  CAST(f.xiucos AS DOUBLE) AS "Extended Cost",
+  CAST(f.xiucof AS DOUBLE) AS "Extended Cost F",
+  CAST(f.xzucos AS DOUBLE) AS "Extended Real Cost",
+  CAST(f.xzucof AS DOUBLE) AS "Extended Real Cost F",
+  CAST(f.xicsun AS DOUBLE) AS "Costing Unit T/U",
+  f.xmtrmg AS "Territory Manager",
+  f.xmslrc AS "Sales Rep",
+  f.cnusiz AS "CNUSIZ",
+  FROM_UNIXTIME (
+    UNIX_TIMESTAMP (
+      CONCAT (
+        SUBSTR (fechaa, 6, 2),
+        '/',
+        SUBSTR (fechaa, 4, 2),
+        '/',
+        '20',
+        SUBSTR (fechaa, 2, 2),
+        ' 00:00:00'
+      ),
+      'dd/MM/yyyy HH:mm:ss'
+    )
+  ) AS "Date",
+  CONCAT (f.pais, '_', f.xiloc2) AS "Country_Loc",
+  CONCAT (f.pais, '_', f.xhcsno) AS "Country_Client",
+  CONCAT (f.xiprdc, ' ', f.xifrmc, f.xicont) AS "Index",
+  CONCAT (f.pais, '_', f.xiprdc, ' ', f.xifrmc, f.xicont) AS "Country_SKU",
+  CONCAT (
+    SUBSTR (f.ohasdt, 6, 2),
+    '-',
+    SUBSTR (f.ohasdt, 4, 2),
+    '-',
+    '20',
+    SUBSTR (f.ohasdt, 2, 2)
+  ) AS "Actual Shp. Date",
+  f.fechaa AS "z.Date2B",
+  f.ohasdt AS "z.actual_Shp_date",
+  f.pais AS "z.Pais",
+  f.fechaa AS "z.fechaa",
+  f.xhprcl AS "z.xhprcl",
+  f.ohldoc AS "ohldoc",
+  f.ohcmri AS "z.ohcmri",
+  CASE
+    WHEN f.xicont = 'AP' THEN '25'
+    WHEN f.xicont = 'AX' THEN '25'
+    WHEN f.xicont = 'X   ' THEN 'X'
+    WHEN f.xicont = 'KG' THEN '1'
+    WHEN f.xicont = '01KG' THEN '1'
+    WHEN f.xicont = '20KG' THEN '20'
+    WHEN f.xicont = '25KG' THEN '25'
+    ELSE '1'
+  END AS "UOM",
+  CASE
+    WHEN f.xicont = 'X   ' THEN CAST(f.xiuprc AS DOUBLE)
+    WHEN f.xicont = 'AP' THEN CAST(f.xiuprc AS DOUBLE) * 40
+    WHEN f.xicont = 'AX' THEN CAST(f.xiuprc AS DOUBLE) * 40
+    WHEN f.xicont = '25KG' THEN CAST(f.xiuprc AS DOUBLE) * 40
+    WHEN f.xicont = '20KG' THEN CAST(f.xiuprc AS DOUBLE) * 50
+    WHEN f.xicont = 'KG' THEN CAST(f.xiuprc AS DOUBLE) * 1000
+    WHEN f.xicont = '01KG' THEN CAST(f.xiuprc AS DOUBLE) * 1000
+    ELSE 0
+  END AS "Unit Price (F) Adj.",
+  ABS(
+    CAST(f.xiucos AS DOUBLE) / CAST(f.xiqtsa AS DOUBLE)
+  ) AS "Unit Cost (F) Adj.",
+  CASE
+    WHEN TRIM(f.xicont) = 'X' THEN CAST(f.xiucos AS DOUBLE)
+    WHEN f.xicont = 'AP' THEN CAST(f.xiucos AS DOUBLE) / 40
+    WHEN f.xicont = 'AX' THEN CAST(f.xiucos AS DOUBLE) / 40
+    WHEN TRIM(f.xicont) = '25KG' THEN CAST(f.xiucos AS DOUBLE) / 40
+    WHEN TRIM(f.xicont) = '20KG' THEN CAST(f.xiucos AS DOUBLE) / 50
+    WHEN TRIM(f.xicont) = 'KG' THEN CAST(f.xiucos AS DOUBLE) / 1000
+    WHEN TRIM(f.xicont) = '01KG' THEN CAST(f.xiucos AS DOUBLE) / 1000
+    ELSE 0
+  END AS "Extended Cost (F) Adj.",
+  (
+    CAST(f.xdescd AS DOUBLE) + CAST(f.xdesch AS DOUBLE) + CAST(f.xdescp AS DOUBLE)
+  ) AS "$ Discount",
+  Customer.Holding_Group_Of AS "GROUP",
+  (
+    CAST(f.xieprc AS DOUBLE) - (
+      CAST(f.xdescd AS DOUBLE) + CAST(f.xdesch AS DOUBLE) + CAST(f.xdescp AS DOUBLE)
+    )
+  ) / 1000 AS "Net revenue KUS",
+  (
+    CAST(
+      (
+        CASE
+          WHEN TRIM(f.xicont) = 'X' THEN CAST(f.xiucos AS DOUBLE)
+          WHEN f.xicont = 'AP' THEN CAST(f.xiucos AS DOUBLE) / 40
+          WHEN f.xicont = 'AX' THEN CAST(f.xiucos AS DOUBLE) / 40
+          WHEN TRIM(f.xicont) = '25KG' THEN CAST(f.xiucos AS DOUBLE) / 40
+          WHEN TRIM(f.xicont) = '20KG' THEN CAST(f.xiucos AS DOUBLE) / 50
+          WHEN TRIM(f.xicont) = 'KG' THEN CAST(f.xiucos AS DOUBLE) / 1000
+          WHEN TRIM(f.xicont) = '01KG' THEN CAST(f.xiucos AS DOUBLE) / 1000
+          ELSE 0
+        END
+      ) AS DOUBLE
+    ) / 1000
+  ) AS "Cost",
+  CAST(
+    (
+      CASE
+        WHEN SUBSTR (fechaa, 4, 2) IN ('10', '11', '12', '06', '07', '08', '09') THEN CAST(
+          CAST(CONCAT ('20', SUBSTR (fechaa, 2, 2)) AS DOUBLE) + 1 AS STRING
+        )
+        ELSE CONCAT ('20', SUBSTR (fechaa, 2, 2))
+      END
+    ) AS INT
+  ) AS fiscal_year,
+  CASE
+    WHEN SUBSTR (fechaa, 4, 2) IN ('10', '11', '12', '06', '07', '08', '09') THEN CONCAT (
+      'FY',
+      CAST(
+        CAST(SUBSTR (fechaa, 2, 2) AS DOUBLE) + 1 AS STRING
+      )
+    )
+    ELSE CONCAT ('FY', SUBSTR (fechaa, 2, 2))
+  END AS "YEAR",
+  CONCAT (TRIM(f.xiprdc), TRIM(f.xiprsc)) AS "SKU Code",
+  CONCAT (
+    (
+      CASE
+        WHEN SUBSTR (fechaa, 4, 2) IN ('10', '11', '12', '06', '07', '08', '09') THEN CONCAT (
+          'FY',
+          CAST(
+            CAST(SUBSTR (fechaa, 2, 2) AS DOUBLE) + 1 AS STRING
+          )
+        )
+        ELSE CONCAT ('FY', SUBSTR (fechaa, 2, 2))
+      END
     ),
-
-    #"Merged Queries3" = Table.NestedJoin(#"Types SQL extras", {"group", "month_year_nat"}, Discounts_Naturisa, {"group", "year_month_nat"}, "Discounts_Naturisa", JoinKind.LeftOuter),
-    #"Expanded Discounts_Naturisa" = Table.ExpandTableColumn(#"Merged Queries3", "Discounts_Naturisa", {"% Desc_Naturisa","rebate"}, {"Discounts_Naturisa.% Desc_Naturisa","DN.rebate"}),
-    #"Changed Type4" = Table.TransformColumnTypes(#"Expanded Discounts_Naturisa",{{"Discounts_Naturisa.% Desc_Naturisa", type text},{"DN.rebate", type text}}),
-    #"Replaced Value_DN1" = Table.ReplaceValue(#"Changed Type4", null, "generico", Replacer.ReplaceValue, {"DN.rebate"}),
-    #"Norm DN rebate" = Table.TransformColumns(#"Replaced Value_DN1", {{"DN.rebate", each Text.Lower(Text.Trim(_)), type text}}),
-    #"Replaced Value" = Table.ReplaceValue(#"Norm DN rebate",null,"0",Replacer.ReplaceValue,{"Discounts_Naturisa.% Desc_Naturisa"}),
-    #"Changed Type9" = Table.TransformColumnTypes(#"Replaced Value",{{"Discounts_Naturisa.% Desc_Naturisa", type number}}),
-    #"Renamed Columns4" = Table.RenameColumns(#"Changed Type9",{{"Discounts_Naturisa.% Desc_Naturisa", "Desc_Naturisa"}}),
-
-    #"Merged Queries2" = Table.NestedJoin(#"Renamed Columns4", {"customer number", "month_year_nat"}, Discounts_Customer_Month, {"Customer Number", "year_month_nat"}, "Discounts_Customer_Month", JoinKind.LeftOuter),
-    #"Expanded Discounts_Customer_Month" = Table.ExpandTableColumn(#"Merged Queries2", "Discounts_Customer_Month", {"% Desc (OTROS)","rebate"}, {"Discounts_Customer_Month.% Desc (OTROS)","DCM.rebate"}),
-    #"Changed Type10" = Table.TransformColumnTypes(#"Expanded Discounts_Customer_Month",{{"Discounts_Customer_Month.% Desc (OTROS)", type text},{"DCM.rebate", type text}}),
-    #"Replaced Value1" = Table.ReplaceValue(#"Changed Type10",null,"0",Replacer.ReplaceValue,{"Discounts_Customer_Month.% Desc (OTROS)"}),
-    #"Replaced Value_DCM1" = Table.ReplaceValue(#"Replaced Value1", null, "generico", Replacer.ReplaceValue, {"DCM.rebate"}),
-    #"Norm DCM rebate" = Table.TransformColumns(#"Replaced Value_DCM1", {{"DCM.rebate", each Text.Lower(Text.Trim(_)), type text}}),
-    #"Changed Type12" = Table.TransformColumnTypes(#"Norm DCM rebate",{{"Discounts_Customer_Month.% Desc (OTROS)", type number}}),
-    #"Renamed Columns5" = Table.RenameColumns(#"Changed Type12",{{"Discounts_Customer_Month.% Desc (OTROS)", "Desc (OTROS)"}}),
-
-    #"Merged Queries4" = Table.NestedJoin(#"Renamed Columns5", {"month_year_nat", "customer number", "sku.code"}, Discounts_Especiales, {"year_month_nat", "Customer Number", "Sku_code_subcode"}, "Discounts_Especiales", JoinKind.LeftOuter),
-    #"Expanded Discounts_Especiales" = Table.ExpandTableColumn(#"Merged Queries4", "Discounts_Especiales", {"% Desc_Esp_Shipped","rebate"}, {"Discounts_Especiales.% Desc_Esp_Shipped","DE.rebate"}),
-    #"Changed Type13" = Table.TransformColumnTypes(#"Expanded Discounts_Especiales",{{"Discounts_Especiales.% Desc_Esp_Shipped", type text},{"DE.rebate", type text}}),
-    #"Replaced Value2" = Table.ReplaceValue(#"Changed Type13",null,"0",Replacer.ReplaceValue,{"Discounts_Especiales.% Desc_Esp_Shipped"}),
-    #"Replaced Value_DE1" = Table.ReplaceValue(#"Replaced Value2", null, "generico", Replacer.ReplaceValue, {"DE.rebate"}),
-    #"Norm DE rebate" = Table.TransformColumns(#"Replaced Value_DE1", {{"DE.rebate", each Text.Lower(Text.Trim(_)), type text}}),
-    #"Changed Type14" = Table.TransformColumnTypes(#"Norm DE rebate",{{"Discounts_Especiales.% Desc_Esp_Shipped", type number}}),
-    #"Renamed Columns9" = Table.RenameColumns(#"Changed Type14",{{"Discounts_Especiales.% Desc_Esp_Shipped", "Desc (Especiales)"}, {"Desc_Naturisa", "Desc (Naturisa)"}}),
-
-    // Rebates prorrateados SOLO para GENERICO. Si es ESPECIFICO => 0 aquí.
-    #"Added Custom16" =
-        Table.AddColumn(
-            #"Renamed Columns9",
-            "Rebate_Naturisa",
-            each if [rebate_clasification] = "ESPECIFICO"
-                 then 0
-                 else [net revenue kus]*[#"Desc (Naturisa)"]*1000
-        ),
-    #"Added Custom20" =
-        Table.AddColumn(
-            #"Added Custom16",
-            "Rebate_Otros",
-            each if [rebate_clasification] = "ESPECIFICO"
-                 then 0
-                 else [#"Desc (OTROS)"]*[net revenue kus]*1000
-        ),
-    #"Added Custom21" =
-        Table.AddColumn(
-            #"Added Custom20",
-            "Rebate_Especiales",
-            each if [rebate_clasification] = "ESPECIFICO"
-                 then 0
-                 else [#"Desc (Especiales)"]*[tons shipped]
-        ),
-
-    #"Changed Type" = Table.TransformColumnTypes(#"Added Custom21",{{"Rebate_Naturisa", type text}, {"Rebate_Otros", type text}, {"Rebate_Especiales", type text}}),
-    #"Replaced Value24" = Table.ReplaceValue(#"Changed Type",null,"0",Replacer.ReplaceValue,{"Rebate_Naturisa", "Rebate_Otros", "Rebate_Especiales"}),
-    #"Replaced Value25" = Table.ReplaceValue(#"Replaced Value24","NaN","0",Replacer.ReplaceText,{"Rebate_Naturisa", "Rebate_Otros", "Rebate_Especiales"}),
-    #"Replaced Value26" = Table.ReplaceValue(#"Replaced Value25","∞","0",Replacer.ReplaceText,{"Rebate_Naturisa", "Rebate_Otros", "Rebate_Especiales"}),
-    #"Changed Type1" = Table.TransformColumnTypes(#"Replaced Value26",{{"Rebate_Naturisa", type number}, {"Rebate_Otros", type number}, {"Rebate_Especiales", type number}}),
-    #"Added Custom22" = Table.AddColumn(#"Changed Type1", "Rebate", each [Rebate_Naturisa]+[Rebate_Otros]+[Rebate_Especiales]),
-    #"Changed Type19" = Table.TransformColumnTypes(#"Added Custom22",{{"Rebate", type number}}),
-
-    // CN: nulos a 0 (totales y prorrateo por fila)
-    #"CN null to 0" = Table.ReplaceValue(#"Changed Type19", null, 0, Replacer.ReplaceValue, {"cn_total_discount"}),
-    #"CN per-row null to 0" = Table.ReplaceValue(#"CN null to 0", null, 0, Replacer.ReplaceValue, {"cn_total_discount_per_row"}),
-
-    // ESPECIFICO = prorrateo por fila; GENERICO = prorrateo original
-    #"Rebate_Final" =
-        Table.AddColumn(
-            #"CN per-row null to 0",
-            "Rebate_Final",
-            each if [rebate_clasification] = "ESPECIFICO"
-                 then [cn_total_discount_per_row]
-                 else [Rebate],
-            type number
-        ),
-    #"Drop Old Rebate" = Table.RemoveColumns(#"Rebate_Final",{"Rebate"}),
-    #"Rename Final Rebate" = Table.RenameColumns(#"Drop Old Rebate",{{"Rebate_Final","Rebate"}}),
-    #"Added Custom23" = Table.AddColumn(#"Rename Final Rebate", "Margin NIS", each [#"$ sales"]-[#"extended cost (f) adj."]-[#"$ discount"]-[Rebate]),
-    #"Changed Type20" = Table.TransformColumnTypes(#"Added Custom23",{{"Margin NIS", type number}}),
-
-    #"Merged Queries5" = Table.NestedJoin(#"Changed Type20", {"fiscal_year"}, #"JDE_Fact_key_FY toll mill", {"fiscal_year"}, "JDE_Fact_key_FY toll mill", JoinKind.LeftOuter),
-    #"Expanded JDE_Fact_key_FY toll mill" = Table.ExpandTableColumn(#"Merged Queries5", "JDE_Fact_key_FY toll mill", {"Toll mill service"}, {"JDE_Fact_key_FY toll mill.Toll mill service"}),
-    #"Renamed Columns11" = Table.RenameColumns(#"Expanded JDE_Fact_key_FY toll mill",{{"JDE_Fact_key_FY toll mill.Toll mill service", "Toll mill service"}}),
-    #"Replaced Value3" = Table.ReplaceValue(#"Renamed Columns11",null,0,Replacer.ReplaceValue,{"Toll mill service"}),
-    #"Added Custom24" = Table.AddColumn(#"Replaced Value3", "Toll mill", each [Toll mill service]*[tons shipped]),
-    #"Changed Type21" = Table.TransformColumnTypes(#"Added Custom24",{{"Toll mill", type number}}),
-
-    #"Merged Queries6" = Table.NestedJoin(#"Changed Type21", {"month_year_nat", "sku.code"}, #"MFG&Depre_New", {"fechaa", "code"}, "MFG__Month_Code_Subcode", JoinKind.LeftOuter),
-    #"Expanded MFG__Month_Code_Subcode" = Table.ExpandTableColumn(#"Merged Queries6", "MFG__Month_Code_Subcode", {"manufactura", "depreciacion"}, {"manufactura", "depreciacion"}),
-    #"Renamed Columns1" = Table.RenameColumns(#"Expanded MFG__Month_Code_Subcode",{{"manufactura", "MFG_Base"}, {"depreciacion", "Deprec_BASE"}}),
-    #"Changed Type6" = Table.TransformColumnTypes(#"Renamed Columns1",{{"MFG_Base", type text}, {"Deprec_BASE", type text}}),
-    #"Replaced Value10" = Table.ReplaceValue(#"Changed Type6",null,"0",Replacer.ReplaceValue,{"MFG_Base", "Deprec_BASE"}),
-    #"Replaced Value11" = Table.ReplaceValue(#"Replaced Value10","∞","0",Replacer.ReplaceText,{"MFG_Base", "Deprec_BASE"}),
-    #"Changed Type7" = Table.TransformColumnTypes(#"Replaced Value11",{{"MFG_Base", type number}, {"Deprec_BASE", type number}}),
-    #"Added Custom25" = Table.AddColumn(#"Changed Type7", "MFG", each ([MFG_Base]*[tons shipped])),
-    #"Changed Type5" = Table.TransformColumnTypes(#"Added Custom25",{{"MFG", type number}}),
-
-    #"Merged Queries7" = Table.NestedJoin(#"Changed Type5", {"fiscal_year"}, #"JDE_Fact_key_FY Log&War", {"fiscal_year"}, "JDE_Fact_key_FY Log&War", JoinKind.LeftOuter),
-    #"Expanded JDE_Fact_key_FY Log&War" = Table.ExpandTableColumn(#"Merged Queries7", "JDE_Fact_key_FY Log&War", {"Cost_Base_L&W"}, {"JDE_Fact_key_FY Log&War.Cost_Base_L&W"}),
-    #"Renamed Columns14" = Table.RenameColumns(#"Expanded JDE_Fact_key_FY Log&War",{{"JDE_Fact_key_FY Log&War.Cost_Base_L&W", "Cost_Base_L&W"}}),
-    #"Changed Type25" = Table.TransformColumnTypes(#"Renamed Columns14",{{"Cost_Base_L&W", type text}}),
-    #"Replaced Value5" = Table.ReplaceValue(#"Changed Type25",null,"0",Replacer.ReplaceValue,{"Cost_Base_L&W"}),
-    #"Changed Type26" = Table.TransformColumnTypes(#"Replaced Value5",{{"Cost_Base_L&W", type number}}),
-    #"Added Custom26" = Table.AddColumn(#"Changed Type26", "Logist&Wareho", each [#"Cost_Base_L&W"]*[tons shipped]),
-    #"Changed Type27" = Table.TransformColumnTypes(#"Added Custom26",{{"Logist&Wareho", type text}}),
-    #"Replaced Value6" = Table.ReplaceValue(#"Changed Type27",null,"0",Replacer.ReplaceValue,{"Logist&Wareho"}),
-    #"Changed Type28" = Table.TransformColumnTypes(#"Replaced Value6",{{"Logist&Wareho", type number}}),
-
-    #"Merged Queries8" = Table.NestedJoin(#"Changed Type28", {"month_year_nat", "customer number"}, Cost_to_Serv_Fact_Year_Month_Custumer, {"Month_Year", "code_customer"}, "Cost_to_Serv_Fact_Year_Month_Custumer", JoinKind.LeftOuter),
-    #"Expanded Cost_to_Serv_Fact_Year_Month_Custumer" = Table.ExpandTableColumn(#"Merged Queries8", "Cost_to_Serv_Fact_Year_Month_Custumer", {"CS-FreighttoCedis_BASE", "CS-LandFreight_BASE", "CS-RiverFreight_BASE", "CS-Difflocation_BASE", "CS-RiverStowage_BASE", "CS-Forklift_BASE", "CS-RiverCustody_BASE"}, {"Cost_to_Serv_Fact_Year_Month_Custumer.CS-FreighttoCedis_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-LandFreight_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverFreight_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-Difflocation_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverStowage_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-Forklift_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverCustody_BASE"}),
-    #"Changed Type29" = Table.TransformColumnTypes(#"Expanded Cost_to_Serv_Fact_Year_Month_Custumer",{{"Cost_to_Serv_Fact_Year_Month_Custumer.CS-FreighttoCedis_BASE", type text}, {"Cost_to_Serv_Fact_Year_Month_Custumer.CS-LandFreight_BASE", type text}, {"Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverFreight_BASE", type text}, {"Cost_to_Serv_Fact_Year_Month_Custumer.CS-Difflocation_BASE", type text}, {"Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverStowage_BASE", type text}, {"Cost_to_Serv_Fact_Year_Month_Custumer.CS-Forklift_BASE", type text}, {"Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverCustody_BASE", type text}}),
-    #"Replaced Value7" = Table.ReplaceValue(#"Changed Type29",null,"0",Replacer.ReplaceValue,{"Cost_to_Serv_Fact_Year_Month_Custumer.CS-FreighttoCedis_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-LandFreight_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverFreight_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-Difflocation_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverStowage_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-Forklift_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverCustody_BASE"}),
-    #"Replaced Value21" = Table.ReplaceValue(#"Replaced Value7","NaN","0",Replacer.ReplaceText,{"Cost_to_Serv_Fact_Year_Month_Custumer.CS-FreighttoCedis_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-LandFreight_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverFreight_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-Difflocation_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverStowage_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-Forklift_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverCustody_BASE"}),
-    #"Replaced Value22" = Table.ReplaceValue(#"Replaced Value21","∞","0",Replacer.ReplaceText,{"Cost_to_Serv_Fact_Year_Month_Custumer.CS-FreighttoCedis_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-LandFreight_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverFreight_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-Difflocation_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverStowage_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-Forklift_BASE", "Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverCustody_BASE"}),
-    #"Changed Type30" = Table.TransformColumnTypes(#"Replaced Value22",{{"Cost_to_Serv_Fact_Year_Month_Custumer.CS-FreighttoCedis_BASE", type number}, {"Cost_to_Serv_Fact_Year_Month_Custumer.CS-LandFreight_BASE", type number}, {"Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverFreight_BASE", type number}, {"Cost_to_Serv_Fact_Year_Month_Custumer.CS-Difflocation_BASE", type number}, {"Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverStowage_BASE", type number}, {"Cost_to_Serv_Fact_Year_Month_Custumer.CS-Forklift_BASE", type number}, {"Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverCustody_BASE", type number}}),
-    #"Renamed Columns15" = Table.RenameColumns(#"Changed Type30",{{"Cost_to_Serv_Fact_Year_Month_Custumer.CS-FreighttoCedis_BASE", "CS-FreighttoCedis_BASE"}, {"Cost_to_Serv_Fact_Year_Month_Custumer.CS-LandFreight_BASE", "CS-LandFreight_BASE"}, {"Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverFreight_BASE", "CS-RiverFreight_BASE"}, {"Cost_to_Serv_Fact_Year_Month_Custumer.CS-Difflocation_BASE", "CS-Difflocation_BASE"}, {"Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverStowage_BASE", "CS-RiverStowage_BASE"}, {"Cost_to_Serv_Fact_Year_Month_Custumer.CS-Forklift_BASE", "CS-Forklift_BASE"}, {"Cost_to_Serv_Fact_Year_Month_Custumer.CS-RiverCustody_BASE", "CS-RiverCustody_BASE"}}),
-    #"Added Custom27" = Table.AddColumn(#"Renamed Columns15", "CS-Freight to Cedis", each if ([#"CS-FreighttoCedis_BASE"]*[tons shipped]) = null then 0 else ([#"CS-FreighttoCedis_BASE"]*[tons shipped])),
-    #"Added Custom28" = Table.AddColumn(#"Added Custom27", "CS-Land Freight", each if ([#"CS-LandFreight_BASE"]*[tons shipped]) = null then 0 else ([#"CS-LandFreight_BASE"]*[tons shipped])),
-    #"Added Custom29" = Table.AddColumn(#"Added Custom28", "CS-River Freight", each if ([#"CS-RiverFreight_BASE"]*[tons shipped]) = null then 0 else ([#"CS-RiverFreight_BASE"]*[tons shipped])),
-    #"Added Custom30" = Table.AddColumn(#"Added Custom29", "CS-Diff location", each if ([#"CS-Difflocation_BASE"]*[tons shipped]) = null then 0 else ([#"CS-Difflocation_BASE"]*[tons shipped])),
-    #"Added Custom31" = Table.AddColumn(#"Added Custom30", "CS-River Stowage", each if ([#"CS-RiverStowage_BASE"]*[tons shipped]) = null then 0 else ([#"CS-RiverStowage_BASE"]*[tons shipped])),
-    #"Added Custom32" = Table.AddColumn(#"Added Custom31", "CS-River Custody", each if ([#"CS-RiverCustody_BASE"]*[tons shipped]) = null then 0 else ([#"CS-RiverCustody_BASE"]*[tons shipped])),
-    #"Added Custom33" = Table.AddColumn(#"Added Custom32", "CS-Forklift", each if ([#"CS-Forklift_BASE"]*[tons shipped]) = null then 0 else ([#"CS-Forklift_BASE"]*[tons shipped])),
-    #"Changed Type31" = Table.TransformColumnTypes(#"Added Custom33",{{"CS-Freight to Cedis", type text}, {"CS-Land Freight", type text}, {"CS-River Freight", type text}, {"CS-Diff location", type text}, {"CS-River Stowage", type text}, {"CS-River Custody", type text}, {"CS-Forklift", type text}}),
-    #"Replaced Value23" = Table.ReplaceValue(#"Changed Type31","NaN","0",Replacer.ReplaceText,{"CS-Freight to Cedis", "CS-Land Freight", "CS-River Freight", "CS-Diff location", "CS-River Stowage", "CS-River Custody", "CS-Forklift"}),
-    #"Replaced Value27" = Table.ReplaceValue(#"Replaced Value23","∞","0",Replacer.ReplaceText,{"CS-Freight to Cedis", "CS-Land Freight", "CS-River Freight", "CS-Diff location", "CS-River Stowage", "CS-River Custody", "CS-Forklift"}),
-    #"Changed Type2" = Table.TransformColumnTypes(#"Replaced Value27",{{"CS-Freight to Cedis", type number}, {"CS-Land Freight", type number}, {"CS-River Freight", type number}, {"CS-Diff location", type number}, {"CS-River Stowage", type number}, {"CS-River Custody", type number}, {"CS-Forklift", type number}}),
-    #"Added Custom34" = Table.AddColumn(#"Changed Type2", "Cost to Serve", each [#"CS-Freight to Cedis"]+[#"CS-Land Freight"]+[#"CS-River Freight"]+[#"CS-Diff location"]+[#"CS-River Stowage"]+[#"CS-River Custody"]+[#"CS-Forklift"]),
-    #"Changed Type33" = Table.TransformColumnTypes(#"Added Custom34",{{"Cost to Serve", type number}}),
-
-    #"Added Custom35" = Table.AddColumn(#"Changed Type33", "Deprec", each [Deprec_BASE] * [tons shipped]),
-    #"Changed Type37" = Table.TransformColumnTypes(#"Added Custom35",{{"Deprec", type number}}),
-    #"Renamed Columns" = Table.RenameColumns(#"Changed Type37",{{"tons shipped", "Tons Shipped"}}),
-
-    #"Added Custom36" = Table.AddColumn(#"Renamed Columns", "Gross Profit", each if (([Margin NIS]-[Toll mill]-[#"MFG"]-[#"Logist&Wareho"]-[Cost to Serve])) = null then 0 else ([Margin NIS]-[Toll mill]-[#"MFG"]-[#"Logist&Wareho"]-[Cost to Serve])),
-    #"Changed Type8" = Table.TransformColumnTypes(#"Added Custom36",{{"Gross Profit", type text}}),
-    #"Replaced Value4" = Table.ReplaceValue(#"Changed Type8",null,"0",Replacer.ReplaceValue,{"Gross Profit"}),
-    #"Changed Type39" = Table.TransformColumnTypes(#"Replaced Value4",{{"Gross Profit", type number}}),
-
-    #"Merged Queries10" = Table.NestedJoin(#"Changed Type39", {"fiscal_year"}, #"JDE_Fact_key_FY SMT", {"fiscal_year"}, "JDE_Fact_key_FY SMT", JoinKind.LeftOuter),
-    #"Expanded JDE_Fact_key_FY SMT" = Table.ExpandTableColumn(#"Merged Queries10", "JDE_Fact_key_FY SMT", {"Cost_Base_SMT"}, {"JDE_Fact_key_FY SMT.Cost_Base_SMT"}),
-    #"Changed Type40" = Table.TransformColumnTypes(#"Expanded JDE_Fact_key_FY SMT",{{"JDE_Fact_key_FY SMT.Cost_Base_SMT", type text}}),
-    #"Replaced Value12" = Table.ReplaceValue(#"Changed Type40",null,"0",Replacer.ReplaceValue,{"JDE_Fact_key_FY SMT.Cost_Base_SMT"}),
-    #"Changed Type41" = Table.TransformColumnTypes(#"Replaced Value12",{{"JDE_Fact_key_FY SMT.Cost_Base_SMT", type number}}),
-    #"Renamed Columns17" = Table.RenameColumns(#"Changed Type41",{{"JDE_Fact_key_FY SMT.Cost_Base_SMT", "Cost_Base_SMT"}}),
-    #"Added Custom37" = Table.AddColumn(#"Renamed Columns17", "SMT", each if ([Cost_Base_SMT]*[Tons Shipped]) = null then 0 else ([#"Cost_Base_SMT"]*[Tons Shipped])),
-    #"Changed Type43" = Table.TransformColumnTypes(#"Added Custom37",{{"SMT", type number}}),
-
-    #"Merged Queries11" = Table.NestedJoin(#"Changed Type43", {"month_year_nat", "group"}, Distribucion_tech_serve_holding_Month_Year, {"month_year", "holding_group"}, "Distribucion_tech_serve_holding_Month_Year", JoinKind.LeftOuter),
-    #"Expanded Distribucion_tech_serve_holding_Month_Year" = Table.ExpandTableColumn(#"Merged Queries11", "Distribucion_tech_serve_holding_Month_Year", {"Tech_Serv_MetricTon"}, {"Tech_Serv_MetricTon"}),
-    #"Changed Type44" = Table.TransformColumnTypes(#"Expanded Distribucion_tech_serve_holding_Month_Year",{{"Tech_Serv_MetricTon", type text}}),
-    #"Replaced Value14" = Table.ReplaceValue(#"Changed Type44",null,"0",Replacer.ReplaceValue,{"Tech_Serv_MetricTon"}),
-    #"Changed Type45" = Table.TransformColumnTypes(#"Replaced Value14",{{"Tech_Serv_MetricTon", type number}}),
-    #"Added Custom38" = Table.AddColumn(#"Changed Type45", "TechServ", each if ([Tech_Serv_MetricTon]*[Tons Shipped]) = null then 0 else ([Tech_Serv_MetricTon]*[Tons Shipped])),
-    #"Changed Type46" = Table.TransformColumnTypes(#"Added Custom38",{{"TechServ", type number}}),
-
-    #"Merged Queries12" = Table.NestedJoin(#"Changed Type46", {"month_year_nat", "group"}, #"Calculo Sales_Expenses", {"year_month_nat", "GROUP"}, "Calculo Sales_Expenses", JoinKind.LeftOuter),
-    #"Expanded Calculo Sales_Expenses" = Table.ExpandTableColumn(#"Merged Queries12", "Calculo Sales_Expenses", {"Sales_Expenses_Base"}, {"Sales_Expenses_Base"}),
-    #"Changed Type47" = Table.TransformColumnTypes(#"Expanded Calculo Sales_Expenses",{{"Sales_Expenses_Base", type text}}),
-    #"Replaced Value15" = Table.ReplaceValue(#"Changed Type47",null,"0",Replacer.ReplaceValue,{"Sales_Expenses_Base"}),
-    #"Changed Type48" = Table.TransformColumnTypes(#"Replaced Value15",{{"Sales_Expenses_Base", type number}}),
-    #"Added Custom39" = Table.AddColumn(#"Changed Type48", "Sales Exp", each if ([Sales_Expenses_Base]*[Tons Shipped]) = null then 0 else ([Sales_Expenses_Base]*[Tons Shipped])),
-    #"Changed Type49" = Table.TransformColumnTypes(#"Added Custom39",{{"Sales Exp", type number}}),
-
-    #"Merged Queries13" = Table.NestedJoin(#"Changed Type49", {"fiscal_year", "group"}, #"Main (Fact NIS) Total FY Nat/Otros G&A DIST", {"Fiscal_Year", "GROUP"}, "Main (Fact NIS) Total FY Nat/Otros G&A", JoinKind.LeftOuter),
-    #"Expanded Main (Fact NIS) Total FY Nat/Otros G&A" = Table.ExpandTableColumn(#"Merged Queries13", "Main (Fact NIS) Total FY Nat/Otros G&A", {"G&A/MT_BASE"}, {"Main (Fact NIS) Total FY Nat/Otros G&A.G&A/MT_BASE"}),
-    #"Renamed Columns18" = Table.RenameColumns(#"Expanded Main (Fact NIS) Total FY Nat/Otros G&A",{{"Main (Fact NIS) Total FY Nat/Otros G&A.G&A/MT_BASE", "G&A/MT_BASE"}}),
-    #"Added Custom40" = Table.AddColumn(#"Renamed Columns18", "G&A", each if ([#"G&A/MT_BASE"]*[Tons Shipped]) = null then 0 else ([#"G&A/MT_BASE"]*[Tons Shipped])),
-    #"Changed Type51" = Table.TransformColumnTypes(#"Added Custom40",{{"G&A", type number}}),
-    #"Added Custom41" = Table.AddColumn(#"Changed Type51", "SG&A", each if ([SMT]+[TechServ]+[Sales Exp]+[#"G&A"]) = null then 0 else ([SMT]+[TechServ]+[Sales Exp]+[#"G&A"])),
-    #"Changed Type53" = Table.TransformColumnTypes(#"Added Custom41",{{"SG&A", type number}}),
-
-    #"Merged Queries14" = Table.NestedJoin(#"Changed Type53", {"month_year_nat"}, #"Dim Interest Rate", {"year_month"}, "Dim Interest Rate", JoinKind.LeftOuter),
-    #"Expanded Dim Interest Rate" = Table.ExpandTableColumn(#"Merged Queries14", "Dim Interest Rate", {"Day_Interest_Rate"}, {"Dim Interest Rate.Day_Interest_Rate"}),
-    #"Changed Type54" = Table.TransformColumnTypes(#"Expanded Dim Interest Rate",{{"Dim Interest Rate.Day_Interest_Rate", type text}}),
-    #"Replaced Value18" = Table.ReplaceValue(#"Changed Type54",null,"0",Replacer.ReplaceValue,{"Dim Interest Rate.Day_Interest_Rate"}),
-    #"Changed Type55" = Table.TransformColumnTypes(#"Replaced Value18",{{"Dim Interest Rate.Day_Interest_Rate", type number}}),
-    #"Renamed Columns19" = Table.RenameColumns(#"Changed Type55",{{"Dim Interest Rate.Day_Interest_Rate", "Day_Interest_Rate"}}),
-    #"Added Custom42" = Table.AddColumn(#"Renamed Columns19", "Interest expense", each if (([Day_Interest_Rate]*([#"SG&A"]+[Cost to Serve]+[#"Logist&Wareho"]+[#"MFG"]+[#"extended cost (f) adj."]))*[credit_terms]) = null then 0 else (([Day_Interest_Rate]*([#"SG&A"]+[Cost to Serve]+[#"Logist&Wareho"]+[#"MFG"]+[#"extended cost (f) adj."]))*[credit_terms])),
-    #"Changed Type56" = Table.TransformColumnTypes(#"Added Custom42",{{"Interest expense", type number}}),
-
-    #"Added Custom43" = Table.AddColumn(#"Changed Type56", "AOE", each if ([Margin NIS]-[Toll mill]-[#"MFG"]-[#"Logist&Wareho"]-[Cost to Serve]-[Deprec]-[#"SG&A"]-[Interest expense]) = null then 0 else ([Margin NIS]-[Toll mill]-[#"MFG"]-[#"Logist&Wareho"]-[Cost to Serve]-[Deprec]-[#"SG&A"]-[Interest expense])),
-    #"Changed Type58" = Table.TransformColumnTypes(#"Added Custom43",{{"AOE", type number}}),
-
-    #"Added Custom" = Table.AddColumn(#"Changed Type58", "#Sacos/MT", each if [container code] = "25KG" then 40 else if [container code] = "20KG" then 50 else 1),
-    #"Changed Type3" = Table.TransformColumnTypes(#"Added Custom",{{"#Sacos/MT", Int64.Type}}),
-
-    // Histórico 2021–2023 con flag por defecto
-    NIS2021_2023_with_flag = Table.AddColumn(NIS2021_2023, "rebate_clasification", each "GENERICO", type text),
-    #"Appended Query" = Table.Combine({#"Changed Type3", NIS2021_2023_with_flag}),
-
-    #"Added Custom1" = Table.AddColumn(#"Appended Query", "TaxBase", each if ((([Gross Profit] - [#"SG&A"] - [Deprec]) - [Interest expense]) * 0.26) = null then 0 else ((([Gross Profit] - [#"SG&A"] - [Deprec]) - [Interest expense]) * 0.26)),
-    #"Added Custom3" = Table.AddColumn(#"Added Custom1", "AOE-TaxBase", each ([Gross Profit] - [#"SG&A"] - [Deprec]) - [Interest expense] - [TaxBase]),
-    #"Changed Type11" = Table.TransformColumnTypes(#"Added Custom3",{{"TaxBase", type number}, {"AOE-TaxBase", type number}}),
-    #"Removed Columns" = Table.RemoveColumns(#"Changed Type11",{"DE.rebate", "DCM.rebate", "DN.rebate"})
-in
-    #"Removed Columns"
+    CAST(f.xhcsno AS STRING)
+  ) AS "Profitability",
+  CONCAT (TRIM(f.xiprdc), '_', TRIM(f.xiprsc)) AS "SKU.Code",
+  CAST(CAST(SUBSTR (fechaa, 4, 2) AS DOUBLE) AS INT) AS "Month",
+  CAST(CONCAT ('20', SUBSTR (fechaa, 2, 2)) AS INT) AS "Year_Num",
+  CAST(CAST(SUBSTR (fechaa, 4, 2) AS DOUBLE) AS STRING) AS "Month_num",
+  CONCAT (
+    CAST(CAST(SUBSTR (fechaa, 4, 2) AS DOUBLE) AS STRING),
+    '_',
+    CAST(CONCAT ('20', SUBSTR (fechaa, 2, 2)) AS STRING)
+  ) AS "Month_Year_Nat",
+  m.size_mm,
+  m.form,
+  m.stage,
+  CASE
+    WHEN f.xcdist = '110' THEN 'FKT'
+    WHEN f.xcdist = '111' THEN 'DURAN'
+    WHEN f.xcdist = '121' THEN 'GYE'
+    ELSE 'Distrito NO identificado'
+  END AS "planta",
+  m.`Stage + Form` AS "stage + form",
+  m.Protein,
+  y.type_transport,
+  y.Delivery_Point,
+  y.location_id,
+  y.`¨Province` AS "province",
+  CASE
+    WHEN Customer.Holding_Group_Of IN ('EMPAGRAN', 'Logistica', 'INTERCOMPANY') THEN 'NA'
+    ELSE y.type_transport
+  END AS "Transportation type",
+  CASE
+    WHEN Customer.Holding_Group_Of IN ('EMPAGRAN', 'Logistica', 'INTERCOMPANY') THEN 'NA'
+    ELSE y.Delivery_Point
+  END AS "Main delivery Point"
+FROM
+  dev_internal_anh_customer_profitability.nis_filtered_segments_vw AS f
+  LEFT JOIN (
+    SELECT
+      NEW_CUSTOMER.Codigo AS Codigo,
+      TRIM(NEW_CUSTOMER.SEGMENTO_2) AS SEGMENTO2,
+      TRIM(NEW_CUSTOMER.grupo_holding) AS Holding_Group_Of
+    FROM
+      (
+        SELECT
+          t.*,
+          CASE
+            WHEN t.responsable = 'FINANZAS' THEN 'Finanzas'
+            WHEN t.responsable = 'ADMINISTRACION' THEN 'Adm.'
+            WHEN t.responsable = 'SERVICIOS GENERALES' THEN 'Servicios Generales'
+            WHEN t.responsable = 'RMS' THEN 'RMS'
+            WHEN t.responsable = 'LOGISTICA' THEN 'Logistica'
+            WHEN t.responsable = t.estructura
+            AND LENGTH (t.responsable) > 3 THEN t.estructura
+            WHEN t.Segmentation_Cargill_Segment = 'KOBE - STRATEGIC' THEN 'Kobe Strategic'
+            WHEN t.Segmentation_Cargill_Segment = 'NOAH - CLASSIC' THEN 'Noah Classic'
+            WHEN t.Segmentation_Cargill_Segment = 'NOAH - BASE' THEN 'Noah Base'
+            WHEN t.Segmentation_Cargill_Segment = 'NOAH - STRATEGIC' THEN 'Noah Strategic'
+            WHEN t.Segmentation_Cargill_Segment = 'KOBE - CLASSIC' THEN 'Kobe Classic'
+            WHEN t.Segmentation_Cargill_Segment = 'DENNIS' THEN 'Dennis'
+            WHEN TRIM(t.Segmentation_Cargill_Segment) IS NULL THEN 'Noah Base'
+            ELSE 'FALTA'
+          END AS SEGMENTO_2
+        FROM
+          (
+            SELECT
+              l.*,
+              ec.grupo_holding AS Segmentation_Holding,
+              ec.group_id AS Segmentation_Group,
+              ec.cargill_segment AS Segmentation_Cargill_Segment
+            FROM
+              dev_internal_anh_customer_profitability.tb_listado_codigo_clientes_new l
+              LEFT JOIN dev_internal_anh_customer_profitability.tb_ec_customer_segmentation ec ON l.group_id = ec.group_id
+          ) AS t
+      ) AS NEW_CUSTOMER
+    GROUP BY
+      1,2,3
+  ) AS Customer ON f.xhcsno = Customer.Codigo
+  LEFT JOIN (
+    SELECT
+      TRIM(t.code_sku) AS full_code,
+      CASE
+        WHEN CAST(TRIM(t.caliber_sku) AS STRING) = 'NaN' THEN '0'
+        ELSE CAST(TRIM(t.caliber_sku) AS STRING)
+      END AS size_mm,
+      CASE
+        WHEN CAST(TRIM(t.protein_sku) AS STRING) = 'NaN' THEN '0'
+        ELSE CAST(TRIM(t.protein_sku) AS STRING)
+      END AS number_protein,
+      TRIM(t.form_sku) AS form,
+      TRIM(t.stage_sku) AS stage,
+      TRIM(t.name_plant) AS planta,
+      CONCAT (TRIM(t.stage_sku), ' ', TRIM(t.form_sku)) AS `Stage + Form`,
+      CASE
+        WHEN t.protein_sku IS NULL
+        OR TRIM(t.protein_sku) = ''
+        OR LOWER(TRIM(t.protein_sku)) = 'nan' THEN NULL
+        ELSE TRIM(t.protein_sku)
+      END AS Protein
+    FROM
+      dev_internal_anh_customer_profitability.tb_new_material_master AS t
+  ) AS m ON CONCAT (TRIM(f.xiprdc), TRIM(f.xiprsc)) = TRIM(m.full_code)
+  LEFT JOIN (
+    SELECT
+      TRIM(s.type_transport) AS type_transport,
+      TRIM(s.delivery_point) AS Delivery_Point,
+      CAST(TRIM(s.location_) AS STRING) AS location_id,
+      TRIM(s.od) AS Od,
+      CAST(TRIM(s.code_customer) AS STRING) AS code_customer,
+      TRIM(s.province) AS `¨Province`
+    FROM
+      dev_internal_anh_customer_profitability.tb_cost_to_serve AS s
+    GROUP BY
+      1,2,3,4,5,6
+  ) AS y ON TRIM(f.xhcsno) = y.code_customer
+  AND TRIM(f.xionum) = y.Od
+  AND TRIM(f.xiloc2) = y.location_id
+  /* ===== JOIN A CREDIT NOTES (5 LLAVES + MES_AÑO) ===== */
+  LEFT JOIN (
+    SELECT
+      CAST(numero_cliente AS BIGINT) AS cliente_id,
+      UPPER(TRIM(CAST(codigo AS STRING))) AS code,
+      UPPER(
+        CASE
+          WHEN sub_codigo IS NULL THEN ''
+          WHEN LOWER(TRIM(CAST(sub_codigo AS STRING))) IN ('nan', 'null', 'na', '-', '.') THEN ''
+          ELSE TRIM(CAST(sub_codigo AS STRING))
+        END
+      ) AS sub_code,
+      UPPER(
+        CASE
+          WHEN forma IS NULL THEN ''
+          WHEN LOWER(TRIM(CAST(forma AS STRING))) IN ('nan', 'null', 'na', '-', '.') THEN ''
+          ELSE TRIM(CAST(forma AS STRING))
+        END
+      ) AS form,
+      UPPER(
+        CASE
+          WHEN localidad IS NULL THEN ''
+          WHEN LOWER(TRIM(CAST(localidad AS STRING))) IN ('nan', 'null', 'na', '-', '.') THEN ''
+          ELSE TRIM(CAST(localidad AS STRING))
+        END
+      ) AS localidad,
+      CONCAT (
+        CAST(MONTH (fecha_corregida) AS STRING),
+        '_',
+        CAST(YEAR (fecha_corregida) AS STRING)
+      ) AS mes_año,
+      MAX(
+        CASE
+          WHEN UPPER(TRIM(rebate)) = 'ESPECIFICO' THEN 2
+          WHEN UPPER(TRIM(rebate)) IN ('GENERICO', 'GENÉRICO') THEN 1
+          ELSE 0
+        END
+      ) AS rebate_flag,
+      SUM(
+        CASE
+          WHEN UPPER(TRIM(rebate)) = 'ESPECIFICO' THEN CAST(totaldesc AS DOUBLE)
+          ELSE 0
+        END
+      ) AS cn_total_discount
+    FROM
+      (
+        SELECT
+          numero_cliente,
+          codigo,
+          sub_codigo,
+          forma,
+          totaldesc,
+          localidad,
+          rebate,
+          FROM_UNIXTIME (
+            UNIX_TIMESTAMP (
+              CONCAT (
+                SUBSTR (mes_ano, 6, 2),
+                '/',
+                SUBSTR (mes_ano, 4, 2),
+                '/',
+                '20',
+                SUBSTR (mes_ano, 2, 2),
+                ' 00:00:00'
+              ),
+              'dd/MM/yyyy HH:mm:ss'
+            )
+          ) AS fecha_corregida
+        FROM
+          dev_internal_anh_customer_profitability.tb_credit_notes_new
+      ) t
+    GROUP BY
+      1,2,3,4,5,6
+  ) AS cn ON CAST(f.xhcsno AS BIGINT) = cn.cliente_id
+  AND UPPER(TRIM(CAST(f.xiprdc AS STRING))) = cn.code
+  AND UPPER(TRIM(CAST(f.xiprsc AS STRING))) = cn.sub_code
+  AND UPPER(TRIM(CAST(f.xifrmc AS STRING))) = cn.form
+  AND UPPER(TRIM(CAST(f.xiloc2 AS STRING))) = cn.localidad
+  AND CONCAT (
+    CAST(CAST(SUBSTR (f.fechaa, 4, 2) AS DOUBLE) AS STRING),
+    '_',
+    CAST(CONCAT ('20', SUBSTR (f.fechaa, 2, 2)) AS STRING)
+  ) = cn.mes_año
+WHERE
+  f.fechaa >= '1230601'
+  AND FROM_UNIXTIME (
+    UNIX_TIMESTAMP (
+      CONCAT (
+        SUBSTR (f.fechaa, 6, 2),
+        '/',
+        SUBSTR (f.fechaa, 4, 2),
+        '/',
+        '20',
+        SUBSTR (f.fechaa, 2, 2),
+        ' 00:00:00'
+      ),
+      'dd/MM/yyyy HH:mm:ss'
+    )
+  ) <= (
+    CASE
+      WHEN CAST(DAY (NOW ()) AS INT) > 9 THEN LAST_DAY (ADD_MONTHS (NOW (), -1))
+      ELSE LAST_DAY (ADD_MONTHS (NOW (), -2))
+    END
+  )
