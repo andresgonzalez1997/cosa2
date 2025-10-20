@@ -1,3 +1,5 @@
+
+
 // TIPOS QUE VIENEN DE SQL
 #"Types SQL extras" =
     Table.TransformColumnTypes(
