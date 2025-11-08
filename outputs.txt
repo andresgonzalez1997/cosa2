@@ -1,3 +1,418 @@
+# -*- coding: utf-8 -*-
+# Compatibilidad Python 3.7
+from typing import List, Optional, Tuple
+import os
+import re
+import difflib
+import pathlib
+import datetime as dt
+import pandas as pd
+from pdf2docx import Converter
+from docx import Document
+from docx.text.paragraph import Paragraph
+from docx.table import Table
+from docx.oxml.table import CT_Tbl
+from docx.oxml.text.paragraph import CT_P
+
+# ------------------------------------------------------------
+# Nombres estándar (16 columnas)
+# ------------------------------------------------------------
+COLUMN_NAMES: List[str] = [
+    "product_number","formula_code","product_name","product_form","unit_weight",
+    "pallet_quantity","stocking_status","min_order_quantity","days_lead_time",
+    "fob_or_dlv","price_change","list_price","full_pallet_price",
+    "half_load_full_pallet_price","full_load_full_pallet_price","full_load_best_price",
+]
+NUMERIC_COLS: List[str] = ["pallet_quantity","min_order_quantity","days_lead_time"] + COLUMN_NAMES[10:]
+
+# ------------------------------------------------------------
+# Species (títulos del documento) - tu lista
+# ------------------------------------------------------------
+SPECIES_LIST: List[str] = [
+    "AQUACULTURE","CATTLE - ACCURATION/SPR BLOCKS","CATTLE - PROTEIN TUBS",
+    "CATTLE - MINERAL TUBS","CATTLE - WEATHERIZED MINERAL","CATTLE - STARTERS",
+    "CATTLE - FINISHERS","CATTLE - RANGE SUPPLEMENTS","SHEEP","ALL PURPOSE LIVESTOCK",
+    "DEER/GAME","FAMILY FLOCK","FAMILY FLOCK ORGANIC","GAME BIRD","GOAT","GRAINLAND",
+    "HORSE","TRIPLE CROWN HORSE","MAZURI BIRD/RATITE","MAZURI HERBIVORE",
+    "MAZURI KOI / AQUATIC","MAZURI ALPACA/LLAMA","MAZURI MINIPIG","MAZURI OTHER",
+    "MAZURI PRIMATE","MAZURI RODENT","MAZURI SMALL PACK","SPECIALTY MILK REPLACERS",
+    "MILK REPLACER - FULL POTENTIAL","MILK REPLACER - GROWTH","CALF CARE SUPPLEMENTS",
+    "PET FOOD - EXCLUSIVE PRODUCTS","PET FOOD - INFINIA PRODUCTS",
+    "PET FOOD - RED FLANNEL","PET FOOD - PMI TRADITIONAL","RABBIT",
+    "PREMIUM SHOW DIETS","WILD BIRD","SWINE RETAIL","PLF CATTLE",
+]
+
+SPECIES_FUZZY_THRESHOLD: float = 0.98
+
+def _species_top_level(s: str) -> str:
+    s = re.sub(r"\s+", " ", (s or "")).strip()
+    if " - " in s:
+        return s.split(" - ")[0].strip()
+    if "/" in s:
+        return s.split("/")[0].strip()
+    return s
+
+CANONICAL_SPECIES = sorted({_species_top_level(s) for s in SPECIES_LIST})
+
+# Tokens de encabezados
+HEADER_TOKENS = {
+    "PRODUCT","FORM","UNIT","WEIGHT","PALLET","MIN","ORDER","QUANTITY","DAYS","LEAD",
+    "TIME","STOCKING","STATUS","FOB","DLV","FORMULA","PRICE","PRICE / UNIT",
+    "PRICE IN US DOLLARS","CHANGE IN PRICE","LIST PRICE","FULL PALLET",
+    "HALF LOAD","BEST PRICE"
+}
+
+# Plantas conocidas
+KNOWN_PLANTS = [
+    "ATCHISON KS","CAMP HILL PA","CLARENCE IA","CLIFTON TX","EVANSVILLE IN",
+    "FORT WORTH TX","FREMONT NE","GAINESVILLE GA","GONZALES TX","HENDERSON CO",
+    "LAKELAND FL","LUBBOCK TX","MARTINSVILLE VA","MASSILLON OH","MCGREGOR TX",
+    "MILFORD IN","NASHVILLE TN","OKLAHOMA CITY OK","PORTLAND OR","ROSELAND LA",
+    "ROSENBERG TX","SAINT JOSEPH MO","SPOKANE WA","SPRINGFIELD MO","STATESVILLE NC",
+    "STOCKTON CA","WICHITA KS",
+]
+
+# ------------------------------------------------------------
+# Conversión PDF -> DOCX
+# ------------------------------------------------------------
+def _convert_pdf_to_docx(pdf_path: str) -> pathlib.Path:
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+    os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+    docx_path = pathlib.Path(pdf_path).with_suffix(".docx")
+    if docx_path.exists() and docx_path.stat().st_size > 0:
+        return docx_path
+    conv = Converter(pdf_path)
+    try:
+        conv.convert(str(docx_path), start=0, end=None)
+    finally:
+        try: conv.close()
+        except Exception: pass
+    return docx_path
+
+# ------------------------------------------------------------
+# Utilidades DOCX
+# ------------------------------------------------------------
+def _iter_body_blocks(doc: Document):
+    body = doc.element.body
+    for child in body.iterchildren():
+        if isinstance(child, CT_P):
+            yield Paragraph(child, doc)
+        elif isinstance(child, CT_Tbl):
+            yield Table(child, doc)
+
+def _clean_cell_text(s: str) -> str:
+    if s is None:
+        return ""
+    s = s.replace("\\-", "-").replace("\t", " ")
+    s = re.sub(r"\s+", " ", s)
+    return s.strip()
+
+def _table_to_dataframe(tbl: Table) -> pd.DataFrame:
+    rows: List[List[str]] = []
+    ncols = 0
+    for r in tbl.rows:
+        cells = [_clean_cell_text(c.text) if c.text else "" for c in r.cells]
+        ncols = max(ncols, len(cells))
+        rows.append(cells)
+    if ncols == 0:
+        return pd.DataFrame()
+    rows = [r + [""] * (ncols - len(r)) for r in rows]
+    return pd.DataFrame(rows)
+
+# ------------------------------------------------------------
+# Limpieza filas / selección columnas
+# ------------------------------------------------------------
+def _normalize_upper(s: str) -> str:
+    return re.sub(r"\s+"," ",(s or "")).strip().upper()
+
+def _is_header_row(row: pd.Series) -> bool:
+    txt = " ".join(str(x) for x in row if pd.notna(x)).upper()
+    hits = sum(tok in txt for tok in HEADER_TOKENS)
+    return hits >= 2 or txt in {"PRICE / UNIT", "PRICE IN US DOLLARS"}
+
+_PRODUCT_CODE_RX = re.compile(r"^\s*\d")
+
+def _drop_headers(df: pd.DataFrame) -> pd.DataFrame:
+    out = df[~df.apply(_is_header_row, axis=1)].copy()
+    out.replace("", pd.NA, inplace=True)
+    out.dropna(how="all", inplace=True)
+    out.reset_index(drop=True, inplace=True)
+    return out
+
+def _window_16(df_raw: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """
+    Selecciona la mejor ventana de 16 columnas, pero
+    **NUNCA** filtra filas: devuelve TODA la subtabla sin headers.
+    Así evitamos "comernos" filas.
+    """
+    if df_raw.shape[1] < 16:
+        return None
+    best_sub = None
+    best_score = -1
+    n = df_raw.shape[1]
+    for start in range(0, n - 16 + 1):
+        sub = df_raw.iloc[:, start:start+16].copy()
+        sub.columns = COLUMN_NAMES
+        sub = _drop_headers(sub)
+        # score simple: cuántas filas tienen algo en product_number o product_name
+        score = int(sub["product_number"].notna().sum() + sub["product_name"].notna().sum())
+        if score > best_score:
+            best_score = score
+            best_sub = sub
+    return best_sub
+
+def _filter_data_table(df: pd.DataFrame, keep_separators: bool=False) -> Optional[pd.DataFrame]:
+    """
+    NO filtra por _is_product_row: conserva TODAS las filas con contenido.
+    Elimina solo filas totalmente vacías o compuestas por ';;;;'.
+    Si keep_separators=True, ni siquiera elimina esas separadoras.
+    """
+    if df.empty:
+        return None
+
+    out = df.copy()
+    out.replace("", pd.NA, inplace=True)
+    out.dropna(how="all", inplace=True)
+    out.reset_index(drop=True, inplace=True)
+
+    if not keep_separators:
+        def _only_separators(row: pd.Series) -> bool:
+            for v in row:
+                s = str(v) if pd.notna(v) else ""
+                s = s.strip()
+                if s and not all(ch == ';' for ch in s):
+                    return False
+            return True
+        mask_sep = out.apply(_only_separators, axis=1)
+        out = out.loc[~mask_sep].copy()
+
+    return out if not out.empty else None
+
+# ------------------------------------------------------------
+# Metadatos (fecha/planta)
+# ------------------------------------------------------------
+_DATE_RXES = [
+    re.compile(r"\b(\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4})\b"),
+    re.compile(r"\b(\d{4}[/\-]\d{1,2}[/\-]\d{1,2})\b"),
+]
+_PLANT_TOKEN_RX = re.compile(r"\b([A-Z][A-Z]+(?:\s+[A-Z]+)*)\s+([A-Z]{2})\b")
+
+def _parse_date_any(s: str) -> Optional[dt.date]:
+    s = (s or "").strip()
+    for rx in _DATE_RXES:
+        m = rx.search(s)
+        if not m: continue
+        ds = m.group(1)
+        sep = "/" if "/" in ds else "-"
+        parts = ds.split(sep)
+        if len(parts[0]) == 4:
+            yyyy, mm, dd = parts
+        else:
+            mm, dd, yy = parts
+            if len(yy) == 2: yy = "20"+yy
+            yyyy = yy
+        try:
+            return dt.date(int(yyyy), int(mm), int(dd))
+        except ValueError:
+            pass
+    return None
+
+def _fuzzy_match(candidate: str, pool: List[str], cutoff: float = 0.75) -> str:
+    cand = _normalize_upper(candidate)
+    if not cand: return "PLANTA DESCONOCIDA"
+    normalized = [_normalize_upper(p) for p in pool]
+    match = difflib.get_close_matches(cand, normalized, n=1, cutoff=cutoff)
+    return match[0] if match else cand
+
+def _extract_meta_from_top_tables(doc: Document) -> Tuple[str, Optional[dt.date]]:
+    plant_candidate: Optional[str] = None
+    eff_candidate: Optional[dt.date] = None
+    scanned_tables = 0
+    for block in _iter_body_blocks(doc):
+        if isinstance(block, Paragraph):
+            if eff_candidate is None:
+                eff_candidate = _parse_date_any(block.text)
+        elif isinstance(block, Table):
+            scanned_tables += 1
+            texts = []
+            for r in block.rows:
+                for c in r.cells:
+                    if c.text: texts.append(c.text.strip())
+            big = _normalize_upper(" ".join(texts))
+            if eff_candidate is None:
+                eff_candidate = _parse_date_any(big)
+            if plant_candidate is None:
+                m = _PLANT_TOKEN_RX.search(big)
+                if m:
+                    plant_candidate = f"{m.group(1)} {m.group(2)}"
+            if scanned_tables >= 3 and plant_candidate and eff_candidate:
+                break
+    plant_out = _fuzzy_match(plant_candidate or "", KNOWN_PLANTS, cutoff=0.75) if plant_candidate else "PLANTA DESCONOCIDA"
+    return plant_out, eff_candidate
+
+# ------------------------------------------------------------
+# Species (fuzzy ≥ 0.95) + forward-fill
+# ------------------------------------------------------------
+def _best_fuzzy(text: str, pool: List[str], threshold: float) -> Optional[str]:
+    text = _normalize_upper(text)
+    best, best_sc = None, 0.0
+    for cand in pool:
+        sc = difflib.SequenceMatcher(None, text, _normalize_upper(cand)).ratio()
+        if sc > best_sc:
+            best, best_sc = cand, sc
+    return best if best_sc >= threshold else None
+
+def _table_plain_text(tbl: Table) -> str:
+    txts = []
+    for r in tbl.rows:
+        for c in r.cells:
+            t = (c.text or "").strip()
+            if t: txts.append(t)
+    return _normalize_upper(" ".join(txts))
+
+def _table_has_productlike_cell(tbl: Table) -> bool:
+    # evita confundir una tabla pequeña de datos con "tabla-título"
+    for r in tbl.rows:
+        for c in r.cells:
+            t = (c.text or "").strip()
+            if re.match(r"^\s*\d", t):  # empieza con dígito
+                return True
+    return False
+
+def _is_title_table(tbl: Table) -> Optional[str]:
+    try:
+        rows = len(tbl.rows); cols = len(tbl.columns)
+    except Exception:
+        return None
+    if rows <= 2 and cols <= 3:
+        if _table_has_productlike_cell(tbl):
+            return None  # ¡es datos, no título!
+        txt = _table_plain_text(tbl)
+        hit = _best_fuzzy(txt, SPECIES_LIST, SPECIES_FUZZY_THRESHOLD)
+        if hit: return hit
+        hit2 = _best_fuzzy(txt, CANONICAL_SPECIES, SPECIES_FUZZY_THRESHOLD)
+        return hit2
+    return None
+
+# ------------------------------------------------------------
+# Normalización de product_form
+# ------------------------------------------------------------
+_VALID_FORMS = {
+    "EXTRUDED","LIQUID","MEAL","PELLETS","CRUMBLES",
+    "BLOCKS","BISCUIT","TEXTURED","CUBED","POWDER","SEED","GRANULES"
+}
+def _normalize_product_form(val: Optional[str]) -> Optional[str]:
+    if pd.isna(val): return val
+    cand = re.sub(r"\s+"," ",str(val)).strip().upper()
+    if cand in _VALID_FORMS:
+        return cand
+    toks = cand.split()
+    last = toks[-1] if toks else ""
+    if last in _VALID_FORMS:
+        return last
+    return cand
+
+# ------------------------------------------------------------
+# Numéricos
+# ------------------------------------------------------------
+def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    def to_float(s):
+        if pd.isna(s): return None
+        s = str(s).replace(",", "").strip()
+        neg = s.endswith("-") or (s.startswith("(") and s.endswith(")"))
+        s = s.strip("()- ")
+        try: return float(s) * (-1 if neg else 1)
+        except Exception: return None
+    for c in NUMERIC_COLS:
+        if c in df.columns:
+            df[c] = df[c].apply(to_float)
+    return df
+
+# ------------------------------------------------------------
+# FUNCIÓN PRINCIPAL
+# ------------------------------------------------------------
+def read_file(pdf_path: str, keep_separators: bool=False) -> pd.DataFrame:
+    """
+    keep_separators=False  -> elimina filas separadoras (recomendado)
+    keep_separators=True   -> conserva TODO (incluye separadores)
+    """
+    pdf_path = str(pdf_path)
+    docx_path = _convert_pdf_to_docx(pdf_path)
+    doc = Document(str(docx_path))
+
+    plant_location, eff_date = _extract_meta_from_top_tables(doc)
+
+    current_species: Optional[str] = None
+    last_species: Optional[str] = None
+    data_tables: List[pd.DataFrame] = []
+    species_by_table: List[str] = []
+
+    for block in _iter_body_blocks(doc):
+        if isinstance(block, Paragraph):
+            txt = _normalize_upper(block.text)
+            if txt:
+                hit = _best_fuzzy(txt, SPECIES_LIST, SPECIES_FUZZY_THRESHOLD)
+                if not hit:
+                    hit = _best_fuzzy(txt, CANONICAL_SPECIES, SPECIES_FUZZY_THRESHOLD)
+                if hit:
+                    current_species = hit
+                    last_species = current_species
+        elif isinstance(block, Table):
+            title_tbl = _is_title_table(block)
+            if title_tbl:
+                current_species = title_tbl
+                last_species = current_species
+                continue
+
+            df_raw = _table_to_dataframe(block)
+            if df_raw.empty:
+                continue
+
+            df16 = _window_16(df_raw)
+            if df16 is None or df16.empty:
+                continue
+
+            clean = _filter_data_table(df16, keep_separators=keep_separators)
+            if clean is None or clean.empty:
+                continue
+
+            # species para esta tabla (sin fallback por índice)
+            sp = current_species or last_species or "DESCONOCIDO"
+
+            if "product_form" in clean.columns:
+                clean["product_form"] = clean["product_form"].map(_normalize_product_form)
+
+            data_tables.append(clean)
+            species_by_table.append(sp)
+            current_species = None  # se reseteará al ver un nuevo rótulo
+
+    if not data_tables:
+        return pd.DataFrame(columns=[*COLUMN_NAMES, "plant_location","date_inserted","source","species"])
+
+    out_blocks: List[pd.DataFrame] = []
+    for i, df_tbl in enumerate(data_tables):
+        df2 = df_tbl.copy()
+        df2["species"] = species_by_table[i]
+        out_blocks.append(df2)
+
+    df = pd.concat(out_blocks, ignore_index=True)
+    df["plant_location"] = plant_location
+    df["date_inserted"] = eff_date
+    df["source"] = pathlib.Path(pdf_path).name
+
+    for col in ["product_form","species","source"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str)\
+                             .str.replace("\t"," ", regex=False)\
+                             .str.replace("\\-","-", regex=False)\
+                             .str.strip()
+
+    df = _fix_numeric(df)
+    return df[[*COLUMN_NAMES, "plant_location","date_inserted","source","species"]]
+
+#MAIN-------------------------------------------------------------------------------------
 import competitor_data.purina_file_horizontal as pfh
 import os
 import pathlib
