@@ -26,7 +26,7 @@ COLUMN_NAMES: List[str] = [
 NUMERIC_COLS: List[str] = ["pallet_quantity","min_order_quantity","days_lead_time"] + COLUMN_NAMES[10:]
 
 # ------------------------------------------------------------
-# Species (títulos del documento) - tu lista
+# Species (títulos del documento)
 # ------------------------------------------------------------
 SPECIES_LIST: List[str] = [
     "AQUACULTURE","CATTLE - ACCURATION/SPR BLOCKS","CATTLE - PROTEIN TUBS",
@@ -335,7 +335,7 @@ def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
 # ------------------------------------------------------------
 def read_file(pdf_path: str, keep_separators: bool=False) -> pd.DataFrame:
     """
-    keep_separators=False  -> elimina filas separadoras (recomendado)
+    keep_separators=False  -> elimina filas separadoras
     keep_separators=True   -> conserva TODO (incluye separadores)
     """
     pdf_path = str(pdf_path)
@@ -413,6 +413,7 @@ def read_file(pdf_path: str, keep_separators: bool=False) -> pd.DataFrame:
     return df[[*COLUMN_NAMES, "plant_location","date_inserted","source","species"]]
 
 #MAIN-------------------------------------------------------------------------------------
+
 import competitor_data.purina_file_horizontal as pfh
 import os
 import pathlib
