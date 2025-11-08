@@ -1,588 +1,266 @@
-# -*- coding: utf-8 -*-
-# Compatibilidad Python 3.7
-from typing import List, Optional, Tuple
-import os
-import re
-import difflib
+from __future__ import annotations
+import datetime as _dt
 import pathlib
-import datetime as dt
+import re
+from typing import List, Optional, Union
+from PyPDF2 import PdfReader
 import pandas as pd
-from pdf2docx import Converter
-from docx import Document
-from docx.text.paragraph import Paragraph
-from docx.table import Table
-from docx.oxml.table import CT_Tbl
-from docx.oxml.text.paragraph import CT_P
+import tabula
 
-# ------------------------------------------------------------
-# Nombres estándar (16 columnas)
-# ------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 1. Nombres estándar (16 columnas del PDF original)
+# ---------------------------------------------------------------------------
 COLUMN_NAMES: List[str] = [
-    "product_number","formula_code","product_name","product_form","unit_weight",
-    "pallet_quantity","stocking_status","min_order_quantity","days_lead_time",
-    "fob_or_dlv","price_change","list_price","full_pallet_price",
-    "half_load_full_pallet_price","full_load_full_pallet_price","full_load_best_price",
-]
-NUMERIC_COLS: List[str] = ["pallet_quantity","min_order_quantity","days_lead_time"] + COLUMN_NAMES[10:]
-
-# ------------------------------------------------------------
-# Species (títulos del documento)
-# ------------------------------------------------------------
-SPECIES_LIST: List[str] = [
-    "AQUACULTURE","CATTLE - ACCURATION/SPR BLOCKS","CATTLE - PROTEIN TUBS",
-    "CATTLE - MINERAL TUBS","CATTLE - WEATHERIZED MINERAL","CATTLE - STARTERS",
-    "CATTLE - FINISHERS","CATTLE - RANGE SUPPLEMENTS","SHEEP","ALL PURPOSE LIVESTOCK",
-    "DEER/GAME","FAMILY FLOCK","FAMILY FLOCK ORGANIC","GAME BIRD","GOAT","GRAINLAND",
-    "HORSE","TRIPLE CROWN HORSE","MAZURI BIRD/RATITE","MAZURI HERBIVORE",
-    "MAZURI KOI / AQUATIC","MAZURI ALPACA/LLAMA","MAZURI MINIPIG","MAZURI OTHER",
-    "MAZURI PRIMATE","MAZURI RODENT","MAZURI SMALL PACK","SPECIALTY MILK REPLACERS",
-    "MILK REPLACER - FULL POTENTIAL","MILK REPLACER - GROWTH","CALF CARE SUPPLEMENTS",
-    "PET FOOD - EXCLUSIVE PRODUCTS","PET FOOD - INFINIA PRODUCTS",
-    "PET FOOD - RED FLANNEL","PET FOOD - PMI TRADITIONAL","RABBIT",
-    "PREMIUM SHOW DIETS","WILD BIRD","SWINE RETAIL","PLF CATTLE",
+    "product_number",
+    "formula_code",
+    "product_name",
+    "product_form",
+    "unit_weight",
+    "pallet_quantity",
+    "stocking_status",
+    "min_order_quantity",
+    "days_lead_time",
+    "fob_or_dlv",
+    "price_change",
+    "list_price",
+    "full_pallet_price",
+    "half_load_full_pallet_price",
+    "full_load_full_pallet_price",
+    "full_load_best_price",
 ]
 
-SPECIES_FUZZY_THRESHOLD: float = 0.98
+# ---------------------------------------------------------------------------
+# 2. Columnas numéricas que se convertirán a float
+# ---------------------------------------------------------------------------
+NUMERIC_COLS: List[str] = [
+    "pallet_quantity", "min_order_quantity", "days_lead_time",
+] + COLUMN_NAMES[10:]
 
-def _species_top_level(s: str) -> str:
-    s = re.sub(r"\s+", " ", (s or "")).strip()
-    if " - " in s:
-        return s.split(" - ")[0].strip()
-    if "/" in s:
-        return s.split("/")[0].strip()
-    return s
-
-CANONICAL_SPECIES = sorted({_species_top_level(s) for s in SPECIES_LIST})
-
-# Tokens de encabezados
-HEADER_TOKENS = {
-    "PRODUCT","FORM","UNIT","WEIGHT","PALLET","MIN","ORDER","QUANTITY","DAYS","LEAD",
-    "TIME","STOCKING","STATUS","FOB","DLV","FORMULA","PRICE","PRICE / UNIT",
-    "PRICE IN US DOLLARS","CHANGE IN PRICE","LIST PRICE","FULL PALLET",
-    "HALF LOAD","BEST PRICE"
-}
-
-# Plantas conocidas
-KNOWN_PLANTS = [
-    "ATCHISON KS","CAMP HILL PA","CLARENCE IA","CLIFTON TX","EVANSVILLE IN",
-    "FORT WORTH TX","FREMONT NE","GAINESVILLE GA","GONZALES TX","HENDERSON CO",
-    "LAKELAND FL","LUBBOCK TX","MARTINSVILLE VA","MASSILLON OH","MCGREGOR TX",
-    "MILFORD IN","NASHVILLE TN","OKLAHOMA CITY OK","PORTLAND OR","ROSELAND LA",
-    "ROSENBERG TX","SAINT JOSEPH MO","SPOKANE WA","SPRINGFIELD MO","STATESVILLE NC",
-    "STOCKTON CA","WICHITA KS",
+# ---------------------------------------------------------------------------
+# 3. Lista predefinida de especies en orden de aparición
+# ---------------------------------------------------------------------------
+SPECIES_LIST = [
+    "AQUACULTURE",
+    "CATTLE - ACCURATION/SPR BLOCKS",
+    "CATTLE - PROTEIN TUBS",
+    "CATTLE - MINERAL TUBS",
+    "CATTLE - WEATHERIZED MINERAL",
+    "CATTLE - STARTERS",
+    "CATTLE - FINISHERS",
+    "CATTLE - RANGE SUPPLEMENTS",
+    "SHEEP",
+    "ALL PURPOSE LIVESTOCK",
+    "DEER/GAME",
+    "FAMILY FLOCK",
+    "FAMILY FLOCK ORGANIC",
+    "GAME BIRD",
+    "GOAT",
+    "GRAINLAND",
+    "HORSE",
+    "TRIPLE CROWN HORSE",
+    "MAZURI BIRD/RATITE",
+    "MAZURI HERBIVORE",
+    "MAZURI KOI / AQUATIC",
+    "MAZURI ALPACA/LLAMA",
+    "MAZURI MINIPIG",
+    "MAZURI OTHER",
+    "MAZURI PRIMATE",
+    "MAZURI RODENT",
+    "MAZURI SMALL PACK",
+    "SPECIALTY MILK REPLACERS",
+    "MILK REPLACER - FULL POTENTIAL",
+    "MILK REPLACER - GROWTH",
+    "CALF CARE SUPPLEMENTS",
+    "PET FOOD - EXCLUSIVE PRODUCTS",
+    "PET FOOD - INFINIA PRODUCTS",
+    "PET FOOD - RED FLANNEL",
+    "PET FOOD - PMI TRADITIONAL",
+    "RABBIT",
+    "PREMIUM SHOW DIETS",
+    "WILD BIRD",
+    "SWINE RETAIL",
+    "PLF CATTLE",
 ]
 
-# ------------------------------------------------------------
-# Conversión PDF -> DOCX
-# ------------------------------------------------------------
-def _convert_pdf_to_docx(pdf_path: str) -> pathlib.Path:
-    os.environ.setdefault("OMP_NUM_THREADS", "1")
-    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-    os.environ.setdefault("MKL_NUM_THREADS", "1")
-    os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
-    docx_path = pathlib.Path(pdf_path).with_suffix(".docx")
-    if docx_path.exists() and docx_path.stat().st_size > 0:
-        return docx_path
-    conv = Converter(pdf_path)
+# ---------------------------------------------------------------------------
+# FECHA EFECTIVA
+# ---------------------------------------------------------------------------
+_DATE_PATTERNS = [
+    re.compile(r'(\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4})\s*Effective\s+Date', re.I),
+    re.compile(r'Effective\s+Date\s*[\-–—]?\s*(\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4})', re.I),
+]
+def extract_effective_date(pdf_path: Union[str, pathlib.Path]) -> _dt.date:
+    reader = PdfReader(str(pdf_path))
+    first_page_text = reader.pages[0].extract_text() or ""
+    for rx in _DATE_PATTERNS:
+        m = rx.search(first_page_text)
+        if m:
+            date_str = m.group(1)
+            sep = "/" if "/" in date_str else "-"
+            mm, dd, yy = date_str.split(sep)
+            if len(yy) == 2:
+                yy = "20" + yy
+            return _dt.datetime.strptime(
+                f"{mm}{sep}{dd}{sep}{yy}", f"%m{sep}%d{sep}%Y"
+            ).date()
+    raise ValueError("No se encontró la fecha efectiva en el PDF.")
+
+# ---------------------------------------------------------------------------
+# EXTRACCIÓN DE UBICACIÓN DE PLANTA
+# ---------------------------------------------------------------------------
+def extract_plant_location(pdf_path: Union[str, pathlib.Path]) -> str:
     try:
-        conv.convert(str(docx_path), start=0, end=None)
-    finally:
-        try: conv.close()
-        except Exception: pass
-    return docx_path
+        tables = tabula.read_pdf(
+            str(pdf_path),
+            pages=1,
+            area=[0, 650, 60, 1000],
+            lattice=False,
+            guess=False,
+            pandas_options={"header": None, "dtype": str},
+        )
+        if not tables:
+            return "PLANTA DESCONOCIDA"
+        text = " ".join(tables[0].fillna("").values.flatten())
+        m = re.search(r"-\s*([A-Za-z &.\-]+?)\s+([A-Za-z]{2})\b", text)
+        if m:
+            plant, state = m.groups()
+            return f"{plant.strip().upper()} {state.upper()}"
+        return "PLANTA DESCONOCIDA"
+    except Exception:
+        return "PLANTA DESCONOCIDA"
 
-# ------------------------------------------------------------
-# Utilidades DOCX
-# ------------------------------------------------------------
-def _iter_body_blocks(doc: Document):
-    body = doc.element.body
-    for child in body.iterchildren():
-        if isinstance(child, CT_P):
-            yield Paragraph(child, doc)
-        elif isinstance(child, CT_Tbl):
-            yield Table(child, doc)
+# ---------------------------------------------------------------------------
+# Lectura de tablas con Tabula
+# ---------------------------------------------------------------------------
+def _read_tables(pdf: str) -> list[pd.DataFrame]:
+    try:
+        return tabula.read_pdf(
+            pdf,
+            pages="all",
+            lattice=True,
+            guess=False,
+            pandas_options={"dtype": str, "header": None},
+        )
+    except Exception as exc:
+        print("[tabula]", exc)
+        return []
 
-def _clean_cell_text(s: str) -> str:
-    if s is None:
-        return ""
-    s = s.replace("\\-", "-").replace("\t", " ")
-    s = re.sub(r"\s+", " ", s)
-    return s.strip()
+# ---------------------------------------------------------------------------
+# Normalización de cada tabla
+# ---------------------------------------------------------------------------
+def _standardize(tbl: pd.DataFrame) -> Optional[pd.DataFrame]:
+    if tbl.shape[1] < 16:
+        return None
+    if tbl.shape[1] >= 17:
+        first, second = tbl.iloc[:, 0], tbl.iloc[:, 1]
+        numeric_like = second.astype(str).str[0].str.isdigit().mean() > 0.5
+        tbl = tbl.iloc[:, 1:17] if numeric_like else tbl.iloc[:, :16]
+    else:
+        tbl = tbl.iloc[:, :16]
+    tbl.columns = COLUMN_NAMES
+    return tbl
 
-def _table_to_dataframe(tbl: Table) -> pd.DataFrame:
-    rows: List[List[str]] = []
-    ncols = 0
-    for r in tbl.rows:
-        cells = [_clean_cell_text(c.text) if c.text else "" for c in r.cells]
-        ncols = max(ncols, len(cells))
-        rows.append(cells)
-    if ncols == 0:
-        return pd.DataFrame()
-    rows = [r + [""] * (ncols - len(r)) for r in rows]
-    return pd.DataFrame(rows)
+# ---------------------------------------------------------------------------
+# Conversión numérica
+# ---------------------------------------------------------------------------
+def _to_float(s: str):
+    if pd.isna(s):
+        return None
+    s = str(s).replace(",", "").strip()
+    sign = -1 if s.endswith("-") or (s.startswith("(") and s.endswith(")")) else 1
+    s = s.strip("()- ")
+    try:
+        return float(s) * sign
+    except ValueError:
+        return None
 
-# ------------------------------------------------------------
-# Limpieza filas / selección columnas
-# ------------------------------------------------------------
-def _normalize_upper(s: str) -> str:
-    return re.sub(r"\s+"," ",(s or "")).strip().upper()
+def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    for col in NUMERIC_COLS:
+        if col in df.columns:
+            df[col] = df[col].apply(_to_float)
+    return df
 
+# ---------------------------------------------------------------------------
+# Detección de filas de cabecera/fragmentos (lógica original)
+# ---------------------------------------------------------------------------
+HEADER_TOKENS = {
+    "PRODUCT", "FORM", "UNIT", "WEIGHT", "PALLET", "MIN", "ORDER", "QUANTITY",
+    "DAYS", "LEAD", "TIME", "STOCKING", "STATUS", "FOB", "DLV",
+}
+PRICE_HEADER_PATTERNS = (
+    "PRICE / UNIT",
+    "PRICE IN US DOLLAR",
+    "PRICE IN US DOLLARS",
+    "MIN / DAYS",
+    "FORMULA CODE",
+    "MONTHLY",
+    "PAGE",
+)
+_PRICE_RE = re.compile("|".join(re.escape(p) for p in PRICE_HEADER_PATTERNS), re.I)
 def _is_header_row(row: pd.Series) -> bool:
-    txt = " ".join(str(x) for x in row if pd.notna(x)).upper()
-    hits = sum(tok in txt for tok in HEADER_TOKENS)
-    return hits >= 2 or txt in {"PRICE / UNIT", "PRICE IN US DOLLARS"}
-
-_PRODUCT_CODE_RX = re.compile(r"^\s*\d")
-
-def _drop_headers(df: pd.DataFrame) -> pd.DataFrame:
-    out = df[~df.apply(_is_header_row, axis=1)].copy()
-    out.replace("", pd.NA, inplace=True)
-    out.dropna(how="all", inplace=True)
-    out.reset_index(drop=True, inplace=True)
-    return out
-
-def _window_16(df_raw: pd.DataFrame) -> Optional[pd.DataFrame]:
-    """
-    Selecciona la mejor ventana de 16 columnas, pero
-    **NUNCA** filtra filas: devuelve TODA la subtabla sin headers.
-    Así evitamos "comernos" filas.
-    """
-    if df_raw.shape[1] < 16:
-        return None
-    best_sub = None
-    best_score = -1
-    n = df_raw.shape[1]
-    for start in range(0, n - 16 + 1):
-        sub = df_raw.iloc[:, start:start+16].copy()
-        sub.columns = COLUMN_NAMES
-        sub = _drop_headers(sub)
-        # score simple: cuántas filas tienen algo en product_number o product_name
-        score = int(sub["product_number"].notna().sum() + sub["product_name"].notna().sum())
-        if score > best_score:
-            best_score = score
-            best_sub = sub
-    return best_sub
-
-def _filter_data_table(df: pd.DataFrame, keep_separators: bool=False) -> Optional[pd.DataFrame]:
-    """
-    NO filtra por _is_product_row: conserva TODAS las filas con contenido.
-    Elimina solo filas totalmente vacías o compuestas por ';;;;'.
-    Si keep_separators=True, ni siquiera elimina esas separadoras.
-    """
-    if df.empty:
-        return None
-
-    out = df.copy()
-    out.replace("", pd.NA, inplace=True)
-    out.dropna(how="all", inplace=True)
-    out.reset_index(drop=True, inplace=True)
-
-    if not keep_separators:
-        def _only_separators(row: pd.Series) -> bool:
-            for v in row:
-                s = str(v) if pd.notna(v) else ""
-                s = s.strip()
-                if s and not all(ch == ';' for ch in s):
-                    return False
+    combined = " ".join(row.astype(str)).upper()
+    if _PRICE_RE.search(combined):
+        return True
+    first = str(row.iloc[0]).strip().upper()
+    if "FORMULA" in combined and "PRODUCT" in combined:
+        return True
+    if first and first[0].isdigit():
+        return False
+    if first.startswith("PRODUCT") and str(row.iloc[1]).upper().startswith("FORMULA"):
+        return True
+    if pd.isna(row.get("list_price")):
+        if any(tok in combined for tok in HEADER_TOKENS):
             return True
-        mask_sep = out.apply(_only_separators, axis=1)
-        out = out.loc[~mask_sep].copy()
-
-    return out if not out.empty else None
-
-# ------------------------------------------------------------
-# Metadatos (fecha/planta)
-# ------------------------------------------------------------
-_DATE_RXES = [
-    re.compile(r"\b(\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4})\b"),
-    re.compile(r"\b(\d{4}[/\-]\d{1,2}[/\-]\d{1,2})\b"),
-]
-_PLANT_TOKEN_RX = re.compile(r"\b([A-Z][A-Z]+(?:\s+[A-Z]+)*)\s+([A-Z]{2})\b")
-
-def _parse_date_any(s: str) -> Optional[dt.date]:
-    s = (s or "").strip()
-    for rx in _DATE_RXES:
-        m = rx.search(s)
-        if not m: continue
-        ds = m.group(1)
-        sep = "/" if "/" in ds else "-"
-        parts = ds.split(sep)
-        if len(parts[0]) == 4:
-            yyyy, mm, dd = parts
-        else:
-            mm, dd, yy = parts
-            if len(yy) == 2: yy = "20"+yy
-            yyyy = yy
-        try:
-            return dt.date(int(yyyy), int(mm), int(dd))
-        except ValueError:
-            pass
-    return None
-
-def _fuzzy_match(candidate: str, pool: List[str], cutoff: float = 0.75) -> str:
-    cand = _normalize_upper(candidate)
-    if not cand: return "PLANTA DESCONOCIDA"
-    normalized = [_normalize_upper(p) for p in pool]
-    match = difflib.get_close_matches(cand, normalized, n=1, cutoff=cutoff)
-    return match[0] if match else cand
-
-def _extract_meta_from_top_tables(doc: Document) -> Tuple[str, Optional[dt.date]]:
-    plant_candidate: Optional[str] = None
-    eff_candidate: Optional[dt.date] = None
-    scanned_tables = 0
-    for block in _iter_body_blocks(doc):
-        if isinstance(block, Paragraph):
-            if eff_candidate is None:
-                eff_candidate = _parse_date_any(block.text)
-        elif isinstance(block, Table):
-            scanned_tables += 1
-            texts = []
-            for r in block.rows:
-                for c in r.cells:
-                    if c.text: texts.append(c.text.strip())
-            big = _normalize_upper(" ".join(texts))
-            if eff_candidate is None:
-                eff_candidate = _parse_date_any(big)
-            if plant_candidate is None:
-                m = _PLANT_TOKEN_RX.search(big)
-                if m:
-                    plant_candidate = f"{m.group(1)} {m.group(2)}"
-            if scanned_tables >= 3 and plant_candidate and eff_candidate:
-                break
-    plant_out = _fuzzy_match(plant_candidate or "", KNOWN_PLANTS, cutoff=0.75) if plant_candidate else "PLANTA DESCONOCIDA"
-    return plant_out, eff_candidate
-
-# ------------------------------------------------------------
-# Species (fuzzy ≥ 0.95) + forward-fill
-# ------------------------------------------------------------
-def _best_fuzzy(text: str, pool: List[str], threshold: float) -> Optional[str]:
-    text = _normalize_upper(text)
-    best, best_sc = None, 0.0
-    for cand in pool:
-        sc = difflib.SequenceMatcher(None, text, _normalize_upper(cand)).ratio()
-        if sc > best_sc:
-            best, best_sc = cand, sc
-    return best if best_sc >= threshold else None
-
-def _table_plain_text(tbl: Table) -> str:
-    txts = []
-    for r in tbl.rows:
-        for c in r.cells:
-            t = (c.text or "").strip()
-            if t: txts.append(t)
-    return _normalize_upper(" ".join(txts))
-
-def _table_has_productlike_cell(tbl: Table) -> bool:
-    # evita confundir una tabla pequeña de datos con "tabla-título"
-    for r in tbl.rows:
-        for c in r.cells:
-            t = (c.text or "").strip()
-            if re.match(r"^\s*\d", t):  # empieza con dígito
-                return True
     return False
 
-def _is_title_table(tbl: Table) -> Optional[str]:
-    try:
-        rows = len(tbl.rows); cols = len(tbl.columns)
-    except Exception:
-        return None
-    if rows <= 2 and cols <= 3:
-        if _table_has_productlike_cell(tbl):
-            return None  # ¡es datos, no título!
-        txt = _table_plain_text(tbl)
-        hit = _best_fuzzy(txt, SPECIES_LIST, SPECIES_FUZZY_THRESHOLD)
-        if hit: return hit
-        hit2 = _best_fuzzy(txt, CANONICAL_SPECIES, SPECIES_FUZZY_THRESHOLD)
-        return hit2
-    return None
+# ---------------------------------------------------------------------------
+# FUNCIÓN PRINCIPAL (con mapeo por bloque ANTES de concatenar)
+# ---------------------------------------------------------------------------
+def read_file(pdf: Union[str, pathlib.Path]) -> pd.DataFrame:
+    # 1) Leer tablas crudas
+    tables = _read_tables(str(pdf))
 
-# ------------------------------------------------------------
-# Normalización de product_form
-# ------------------------------------------------------------
-_VALID_FORMS = {
-    "EXTRUDED","LIQUID","MEAL","PELLETS","CRUMBLES",
-    "BLOCKS","BISCUIT","TEXTURED","CUBED","POWDER","SEED","GRANULES"
-}
-def _normalize_product_form(val: Optional[str]) -> Optional[str]:
-    if pd.isna(val): return val
-    cand = re.sub(r"\s+"," ",str(val)).strip().upper()
-    if cand in _VALID_FORMS:
-        return cand
-    toks = cand.split()
-    last = toks[-1] if toks else ""
-    if last in _VALID_FORMS:
-        return last
-    return cand
+    # 2) Normalizar a 16 columnas
+    std_tables = [t for t in (_standardize(tbl) for tbl in tables) if t is not None]
+    if not std_tables:
+        return pd.DataFrame()
 
-# ------------------------------------------------------------
-# Numéricos
-# ------------------------------------------------------------
-def _fix_numeric(df: pd.DataFrame) -> pd.DataFrame:
-    def to_float(s):
-        if pd.isna(s): return None
-        s = str(s).replace(",", "").strip()
-        neg = s.endswith("-") or (s.startswith("(") and s.endswith(")"))
-        s = s.strip("()- ")
-        try: return float(s) * (-1 if neg else 1)
-        except Exception: return None
-    for c in NUMERIC_COLS:
-        if c in df.columns:
-            df[c] = df[c].apply(to_float)
-    return df
+    # 3) NUEVO: mapear species por orden, por bloque, ANTES del concatenado.
+    #    Además, limpiamos headers por bloque para que no desalineen el índice de especies.
+    mapped_blocks: list[pd.DataFrame] = []
+    sp_idx = 0
+    for tbl in std_tables:
+        block = tbl.copy()
 
-# ------------------------------------------------------------
-# FUNCIÓN PRINCIPAL
-# ------------------------------------------------------------
-def read_file(pdf_path: str, keep_separators: bool=False) -> pd.DataFrame:
-    """
-    keep_separators=False  -> elimina filas separadoras
-    keep_separators=True   -> conserva TODO (incluye separadores)
-    """
-    pdf_path = str(pdf_path)
-    docx_path = _convert_pdf_to_docx(pdf_path)
-    doc = Document(str(docx_path))
+        # Limpieza por-bloque usando tu misma heurística (opcional pero evita headers “puros”)
+        block = block[~block.apply(_is_header_row, axis=1)].dropna(how="all").reset_index(drop=True)
 
-    plant_location, eff_date = _extract_meta_from_top_tables(doc)
-
-    current_species: Optional[str] = None
-    last_species: Optional[str] = None
-    data_tables: List[pd.DataFrame] = []
-    species_by_table: List[str] = []
-
-    for block in _iter_body_blocks(doc):
-        if isinstance(block, Paragraph):
-            txt = _normalize_upper(block.text)
-            if txt:
-                hit = _best_fuzzy(txt, SPECIES_LIST, SPECIES_FUZZY_THRESHOLD)
-                if not hit:
-                    hit = _best_fuzzy(txt, CANONICAL_SPECIES, SPECIES_FUZZY_THRESHOLD)
-                if hit:
-                    current_species = hit
-                    last_species = current_species
-        elif isinstance(block, Table):
-            title_tbl = _is_title_table(block)
-            if title_tbl:
-                current_species = title_tbl
-                last_species = current_species
-                continue
-
-            df_raw = _table_to_dataframe(block)
-            if df_raw.empty:
-                continue
-
-            df16 = _window_16(df_raw)
-            if df16 is None or df16.empty:
-                continue
-
-            clean = _filter_data_table(df16, keep_separators=keep_separators)
-            if clean is None or clean.empty:
-                continue
-
-            # species para esta tabla (sin fallback por índice)
-            sp = current_species or last_species or "DESCONOCIDO"
-
-            if "product_form" in clean.columns:
-                clean["product_form"] = clean["product_form"].map(_normalize_product_form)
-
-            data_tables.append(clean)
-            species_by_table.append(sp)
-            current_species = None  # se reseteará al ver un nuevo rótulo
-
-    if not data_tables:
-        return pd.DataFrame(columns=[*COLUMN_NAMES, "plant_location","date_inserted","source","species"])
-
-    out_blocks: List[pd.DataFrame] = []
-    for i, df_tbl in enumerate(data_tables):
-        df2 = df_tbl.copy()
-        df2["species"] = species_by_table[i]
-        out_blocks.append(df2)
-
-    df = pd.concat(out_blocks, ignore_index=True)
-    df["plant_location"] = plant_location
-    df["date_inserted"] = eff_date
-    df["source"] = pathlib.Path(pdf_path).name
-
-    for col in ["product_form","species","source"]:
-        if col in df.columns:
-            df[col] = df[col].astype(str)\
-                             .str.replace("\t"," ", regex=False)\
-                             .str.replace("\\-","-", regex=False)\
-                             .str.strip()
-
-    df = _fix_numeric(df)
-    return df[[*COLUMN_NAMES, "plant_location","date_inserted","source","species"]]
-
-#MAIN-------------------------------------------------------------------------------------
-
-import competitor_data.purina_file_horizontal as pfh
-import os
-import pathlib
-import re
-import tabula
-import pandas as pd
-
-# SharePoint
-from sharepoint_interface.sharepoint_interface import get_sharepoint_interface
-
-# CDP
-import credentials as crd
-import environments as env
-from cdp_interface import CDPInterface
-
-REPOSITORY  = "/sites/.."
-LOCAL_REPOSITORY = "sharepoint_interface/local_repository/"
-
-def correct_file_name(val: str) -> str:
-    """
-    Reemplaza espacios/puntos/caracteres raros y 
-    deja un string 'limpio' para la tabla temporal.
-    """
-    val = str(val).lower()
-    # elimina ceros adelante
-    val = re.sub(r'^(0){2,}', "", val)
-    # elimina espacios al inicio
-    val = re.sub(r'^[" "-]+', "", val)
-    # elimina caracteres \r \n \t \u00a0
-    val = re.sub(r'[\r\n\r\t\u00a0]+', ' ', val)
-    # colapsa espacios múltiples
-    val = re.sub(r'( ){2,}', ' ', val)
-    # quita espacios finales
-    val = val.strip()
-    # reemplaza espacios, puntos y guiones por underscore
-    val = val.replace(" ", "_")
-    val = val.replace(".", "_")
-    val = val.replace("-", "_")
-    return val
-
-def set_column_types(df: pd.DataFrame) -> pd.DataFrame:
-    # Funcion para asegurar que no hayan columnas fuera de las necesaria y convierte los tipos segun la tabla en CPD
-    # Columnas string
-    string_cols = [
-        "product_number",
-        "formula_code",
-        "product_name",
-        "product_form",
-        "unit_weight",
-        "stocking_status",
-        "fob_or_dlv",
-        "species",
-        "plant_location",
-        "date_inserted",
-        "source",
-        "species"
-    ]
-    for col in string_cols:
-        if col in df.columns:
-            df[col] = df[col].astype("string")
-
-    # Columnas float
-    float_cols = [
-        "pallet_quantity",
-        "min_order_quantity",
-        "days_lead_time",
-        "price_change",
-        "list_price",
-        "full_pallet_price",
-        "half_load_full_pallet_price",
-        "full_load_full_pallet_price",
-        "full_load_best_price"
-    ]
-    for col in float_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    return df
-
-def excecute_process():
-    sp = get_sharepoint_interface("retailpricing")
-    if not sp:
-        print("[ERROR] No se pudo obtener la interfaz de SharePoint.")
-        return
-
-    files = sp.files_in_folder(REPOSITORY)
-    if not files:
-        print(f"[INFO] No hay archivos en {REPOSITORY}")
-        return
-
-    # Filtrar PDFs
-    pdf_files = [f for f in files if f["file_name"].lower().endswith(".pdf")]
-    if not pdf_files:
-        print(f"[INFO] No se encontraron PDFs en {REPOSITORY}")
-        return
-
-    # Conexión a CDP (ambiente de producción en este ejemplo)
-    cdp = CDPInterface(env.production, crd.process_account)
-
-    total = len(pdf_files)
-    for idx, pdf_info in enumerate(pdf_files, start=1):
-        pdf_filename = pdf_info["file_name"]
-        pdf_sharepoint_path = pdf_info["file_path"]
-        print(f"\n[{idx}/{total}] Procesando: {pdf_filename}")
-
-        if not os.path.exists(LOCAL_REPOSITORY):
-            os.makedirs(LOCAL_REPOSITORY, exist_ok=True)
-
-        # Descargar PDF
-        local_pdf_path = sp.download_file(pdf_sharepoint_path, LOCAL_REPOSITORY)
-        if not local_pdf_path:
-            print("[ERROR] No se pudo descargar el PDF.")
+        # Si el bloque quedó vacío (era encabezado puro), NO avanzamos species.
+        if block.empty:
             continue
-        
-        
-        # ANTIGUO:
-        df = pfh.read_file(str(local_pdf_path))
 
-        # Observa columnas
-        print("[DEBUG] Columnas del DF tras parsear:\n", df.columns.tolist())
-        if "ref_col" in df.columns:
-            print("[WARN] Se detectó ref_col en el DF... se eliminará.")
-            df = df.drop(columns=["ref_col"], errors="ignore")
+        species_value = SPECIES_LIST[sp_idx] if sp_idx < len(SPECIES_LIST) else "DESCONOCIDO"
+        block["species"] = species_value
+        mapped_blocks.append(block)
+        sp_idx += 1  # avanzamos especie sólo cuando hubo datos
 
-        print(df.head(5))
+    if not mapped_blocks:
+        return pd.DataFrame()
 
-        # Forzar tipos
-        df = set_column_types(df)
-        print("[DEBUG] Columnas tras set_column_types:\n", df.columns.tolist())
+    # 4) Concatenar todos los bloques ya con species asignada
+    df = pd.concat(mapped_blocks, ignore_index=True)
 
-        # Revisar shape
-        print("[INFO] DataFrame shape:", df.shape)
-        print(df.head(10))
+    # 5) Limpieza adicional global (tu original), por si quedaron headers residuales
+    df = df[~df.apply(_is_header_row, axis=1)].reset_index(drop=True)
+    df.dropna(how="all", inplace=True)
 
-        if df.shape[0] > 0:
-          raw_name = pathlib.Path(pdf_filename).stem
-          base_name = correct_file_name(raw_name)
-          print("[DEBUG] Nombre base para el archivo CSV:", base_name)
+    # 6) Metadatos
+    df["plant_location"] = extract_plant_location(pdf)
+    df["date_inserted"] = extract_effective_date(pdf)
+    df["source"] = pathlib.Path(pdf).name
 
-        # Guardar localmente como CSV
-        csv_output_path = os.path.join("output_csv", f"{base_name}.csv")
-        os.makedirs("output_csv", exist_ok=True)
+    # 7) Números
+    df = _fix_numeric(df)
 
-        try:
-            df.to_csv(csv_output_path, index=False)
-            print(f"[INFO] CSV guardado en: {csv_output_path}")
-        except Exception as e:
-            print(f"[ERROR] Al guardar CSV: {e}")
-
-            # Subir a la tabla final
-            #if cdp.upload_data(df, "comp_price_horizontal_files", base_name):
-            #    print(f"[INFO] '{pdf_filename}' subido correctamente a 'comp_price_horizontal_files'.")
-            #else:
-            #    print("[ERROR] Falló la subida a CDP.")
-        #else:
-            #print("[INFO] DF vacío, no se suben datos.")
-
-        # Eliminar de SharePoint (descomentar si ya confirmaste la subida):
-        
-         # try:
-             # if sp.delete_file(pdf_sharepoint_path):
-                 # print(f"[INFO] Archivo '{pdf_filename}' eliminado de SharePoint.")
-             # else:
-                 # print(f"[WARN] No se pudo eliminar '{pdf_filename}' de SharePoint.")
-         # except Exception as e:
-             # print(f"[ERROR] Al intentar eliminar en SharePoint: {e}")
-        
-
-    print("\n[INFO] Proceso completado para todos los PDFs.")
-
-if __name__ == "__main__":
-    excecute_process()
+    # 8) Orden final
+    return df[[*COLUMN_NAMES, "plant_location", "date_inserted", "source", "species"]]
