@@ -1,1 +1,441 @@
+WITH shipping_base AS (
+    SELECT
+        order_number,
+        order_line_number,
+        product_id,
+        SUM(quantity_shipped_and_invoiced_in_tons) AS toneladas_embarcadas
+    FROM prd_product_anh_external_datablocks.shipping
+    GROUP BY
+        order_number,
+        order_line_number,
+        product_id
+),
 
+org_base AS (
+    SELECT
+        org_id,
+        MAX(country_name) AS country_name
+    FROM prd_product_anh_core_data.org_location_core
+    GROUP BY
+        org_id
+),
+
+customer_base AS (
+    SELECT
+        customer_shipto_id,
+        MAX(customer_shipto_country_code) AS customer_shipto_country_code,
+        MAX(customer_soldto_price_list_erp) AS customer_soldto_price_list_erp,
+        MAX(customer_shipto_segment_code_erp) AS customer_shipto_segment_code_erp,
+        MAX(customer_segment_name) AS customer_segment_name,
+        MAX(customer_central_number) AS customer_central_number
+    FROM prd_product_anh_core_data.customer_core
+    GROUP BY
+        customer_shipto_id
+),
+
+product_base AS (
+    SELECT
+        product_id,
+        MAX(species_12) AS species_12,
+        MAX(sub_species_13) AS sub_species_13,
+        MAX(form_code) AS form_code,
+        MAX(container) AS container,
+        MAX(unit_type_code) AS unit_type_code
+    FROM prd_product_anh_core_data.product_core
+    GROUP BY
+        product_id
+),
+
+base_data AS (
+    SELECT
+        profit.fiscal_year AS fy,
+        profit.posting_period AS month_,
+        org.country_name AS ship_from,
+        customer.customer_shipto_country_code AS ship_to,
+        customer.customer_soldto_price_list_erp AS price_list,
+        product.species_12 AS product_category,
+        product.sub_species_13 AS product_sub_species,
+        customer.customer_shipto_segment_code_erp AS customer_segment_code,
+        customer.customer_segment_name AS customer_segmentation,
+        COALESCE(MAX(profit.sales_representative_name), 'SIN_VENDEDOR') AS sales_person,
+        profit.sap_material_description AS product_name,
+        product.form_code AS form_,
+        product.container AS container,
+        product.unit_type_code AS empaque,
+        profit.source_customer_sold_to_name AS customer_name,
+        customer.customer_central_number AS customer_id,
+        profit.material_number AS product_id,
+        MAX(profit.posting_date) AS date_,
+        profit.sales_order_number,
+        profit.sales_order_item,
+        COALESCE(MAX(shipping_base.order_number), profit.sales_order_number) AS shipping_order_number,
+
+        COALESCE(SUM(profit.additional_quantity_in_tons), 0) AS toneladas_facturadas,
+        COALESCE(MAX(shipping_base.toneladas_embarcadas), 0) AS toneladas_embarcadas,
+
+        CAST(SUM(CASE
+            WHEN profit.cfmr_account_level1 = 'GROSS SALES'
+            THEN profit.amount_usd
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS gross_sales_usd,
+
+        CAST(SUM(CASE
+            WHEN profit.cfmr_account_level1 = 'GROSS SALES'
+            THEN profit.amount_company_code_currency
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS gross_sales_local,
+
+        CAST(SUM(CASE
+            WHEN profit.cfmr_account_level2 = 'COST OF INVENTORY SOLD'
+            THEN profit.amount_usd
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS cost_inv_sold_usd,
+
+        CAST(SUM(CASE
+            WHEN profit.cfmr_account_level2 = 'COST OF INVENTORY SOLD'
+            THEN profit.amount_company_code_currency
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS cost_inv_sold_local,
+
+        CAST(SUM(CASE
+            WHEN UPPER(profit.cfmr_account_description) LIKE '%DISCOUNT%'
+            THEN profit.amount_usd
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS discount_usd,
+
+        CAST(SUM(CASE
+            WHEN UPPER(profit.cfmr_account_description) LIKE '%DISCOUNT%'
+            THEN profit.amount_company_code_currency
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS discount_local,
+
+        CAST(SUM(CASE
+            WHEN profit.cfmr_account_level5 = 'MATERIAL MARGIN'
+            THEN profit.amount_usd
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS material_margin_usd,
+
+        CAST(SUM(CASE
+            WHEN profit.cfmr_account_level5 = 'MATERIAL MARGIN'
+            THEN profit.amount_company_code_currency
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS material_margin_local,
+
+        CAST(SUM(CASE
+            WHEN profit.cfmr_account_level2 = 'NET SALES'
+            THEN profit.amount_usd
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS net_sales_usd,
+
+        CAST(SUM(CASE
+            WHEN profit.cfmr_account_level2 = 'NET SALES'
+            THEN profit.amount_company_code_currency
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS net_sales_local,
+
+        CAST(SUM(CASE
+            WHEN UPPER(profit.cfmr_account_level1) LIKE '%COGS%'
+            THEN profit.amount_usd
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS cogs_usd,
+
+        CAST(SUM(CASE
+            WHEN UPPER(profit.cfmr_account_level1) LIKE '%COGS%'
+            THEN profit.amount_company_code_currency
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS cogs_local,
+
+        CAST(SUM(CASE
+            WHEN profit.cfmr_account_level2 = 'LOGISTICS'
+            THEN profit.amount_usd
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS logistics_usd,
+
+        CAST(SUM(CASE
+            WHEN profit.cfmr_account_level2 = 'LOGISTICS'
+            THEN profit.amount_company_code_currency
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS logistics_local,
+
+        CAST(SUM(CASE
+            WHEN UPPER(profit.billing_type_code) LIKE '%G2%'
+            THEN profit.amount_usd
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS credit_memo_usd,
+
+        CAST(SUM(CASE
+            WHEN UPPER(profit.billing_type_code) LIKE '%G2%'
+            THEN profit.amount_company_code_currency
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS credit_memo_local,
+
+        /* VALIDAR NOMBRES REALES DE FIFO EN SAP */
+        CAST(SUM(CASE
+            WHEN UPPER(profit.cfmr_account_description) LIKE '%FIFO%'
+              OR UPPER(profit.cfmr_account_level5) LIKE '%FIFO%'
+              OR UPPER(profit.cfmr_account_level4) LIKE '%FIFO%'
+            THEN profit.amount_usd
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS cst_fifo_usd,
+
+        CAST(SUM(CASE
+            WHEN UPPER(profit.cfmr_account_description) LIKE '%FIFO%'
+              OR UPPER(profit.cfmr_account_level5) LIKE '%FIFO%'
+              OR UPPER(profit.cfmr_account_level4) LIKE '%FIFO%'
+            THEN profit.amount_company_code_currency
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS cst_fifo_local,
+
+        /* VALIDAR NOMBRES REALES DE MKT EN SAP */
+        CAST(SUM(CASE
+            WHEN UPPER(profit.cfmr_account_description) LIKE '%MKT%'
+              OR UPPER(profit.cfmr_account_description) LIKE '%MARKET%'
+              OR UPPER(profit.cfmr_account_description) LIKE '%MARKETING%'
+              OR UPPER(profit.cfmr_account_level5) LIKE '%MKT%'
+              OR UPPER(profit.cfmr_account_level5) LIKE '%MARKETING%'
+            THEN profit.amount_usd
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS cst_mkt_usd,
+
+        CAST(SUM(CASE
+            WHEN UPPER(profit.cfmr_account_description) LIKE '%MKT%'
+              OR UPPER(profit.cfmr_account_description) LIKE '%MARKET%'
+              OR UPPER(profit.cfmr_account_description) LIKE '%MARKETING%'
+              OR UPPER(profit.cfmr_account_level5) LIKE '%MKT%'
+              OR UPPER(profit.cfmr_account_level5) LIKE '%MARKETING%'
+            THEN profit.amount_company_code_currency
+            ELSE 0
+        END) AS DECIMAL(18,3)) AS cst_mkt_local
+
+    FROM prd_product_anh_external_datablocks.tca_enhanced_profit_and_loss AS profit
+    LEFT JOIN org_base AS org
+        ON profit.org_id = org.org_id
+    LEFT JOIN customer_base AS customer
+        ON profit.customer_shipto_id = customer.customer_shipto_id
+    LEFT JOIN product_base AS product
+        ON profit.product_id = product.product_id
+    LEFT JOIN shipping_base
+        ON profit.sales_order_number = shipping_base.order_number
+       AND profit.sales_order_item = shipping_base.order_line_number
+       AND profit.product_id = shipping_base.product_id
+    WHERE 1 = 1
+      AND org.country_name IN ('Mexico')
+      AND profit.sales_order_number = '1002089809'
+      -- AND profit.material_number = '000000000130131481'
+    GROUP BY
+        profit.fiscal_year,
+        profit.posting_period,
+        org.country_name,
+        customer.customer_shipto_country_code,
+        customer.customer_soldto_price_list_erp,
+        product.species_12,
+        product.sub_species_13,
+        customer.customer_shipto_segment_code_erp,
+        customer.customer_segment_name,
+        profit.sap_material_description,
+        product.form_code,
+        product.container,
+        product.unit_type_code,
+        profit.source_customer_sold_to_name,
+        customer.customer_central_number,
+        profit.material_number,
+        profit.sales_order_number,
+        profit.sales_order_item
+),
+
+classified_data AS (
+    SELECT
+        *,
+        CONCAT(ship_from, ' -> ', ship_to) AS route_key,
+
+        CASE
+            WHEN UPPER(product_category) = 'PET FOOD' THEN 'Pet Food'
+            WHEN UPPER(product_category) = 'TILAPIA' THEN 'Tilapia'
+            WHEN product_id IN (
+                '4053_AM_PL_20KG',
+                '4053_PT_PL_20KG',
+                '4054_PT_PL_25KG',
+                '4056_LE_PL_25KG'
+            ) THEN 'Specific Pork Products'
+            ELSE 'Other'
+        END AS process_family,
+
+        CASE
+            /* PET FOOD */
+            WHEN UPPER(product_category) = 'PET FOOD'
+                 AND UPPER(ship_from) = 'HONDURAS'
+            THEN 'Normal'
+
+            WHEN UPPER(product_category) = 'PET FOOD'
+                 AND UPPER(ship_from) IN ('NICARAGUA', 'COSTA RICA', 'GUATEMALA')
+                 AND UPPER(ship_to) IN ('NICARAGUA', 'COSTA RICA', 'GUATEMALA')
+            THEN 'E2E'
+
+            WHEN UPPER(product_category) = 'PET FOOD'
+                 AND UPPER(ship_from) <> 'HONDURAS'
+            THEN 'E2E'
+
+            /* TILAPIA */
+            WHEN UPPER(product_category) = 'TILAPIA'
+                 AND UPPER(ship_from) = 'HONDURAS'
+                 AND UPPER(ship_to) = 'GUATEMALA'
+            THEN 'Normal'
+
+            WHEN UPPER(product_category) = 'TILAPIA'
+                 AND UPPER(ship_from) <> 'HONDURAS'
+            THEN 'E2E'
+
+            /* SPECIFIC PORK PRODUCTS */
+            WHEN product_id IN (
+                '4053_AM_PL_20KG',
+                '4053_PT_PL_20KG',
+                '4054_PT_PL_25KG',
+                '4056_LE_PL_25KG'
+            )
+            AND UPPER(ship_from) = 'COSTA RICA'
+            AND UPPER(ship_to) = 'COSTA RICA'
+            THEN 'E2E'
+
+            WHEN product_id IN (
+                '4053_AM_PL_20KG',
+                '4053_PT_PL_20KG',
+                '4054_PT_PL_25KG',
+                '4056_LE_PL_25KG'
+            )
+            AND UPPER(ship_from) = 'NICARAGUA'
+            AND UPPER(ship_to) = 'COSTA RICA'
+            THEN 'Normal'
+
+            ELSE 'Normal'
+        END AS e2e_flag
+    FROM base_data
+)
+
+SELECT
+    fy,
+    month_,
+    date_,
+    sales_order_number,
+    sales_order_item,
+    shipping_order_number,
+
+    ship_from,
+    ship_to,
+    route_key,
+
+    process_family,
+    e2e_flag,
+
+    price_list,
+    customer_segment_code,
+    customer_segmentation,
+    sales_person,
+    customer_name,
+    customer_id,
+
+    product_id,
+    product_name,
+    product_category,
+    product_sub_species,
+    form_,
+    container,
+    empaque,
+
+    toneladas_facturadas,
+    toneladas_embarcadas,
+
+    gross_sales_usd,
+    gross_sales_local,
+    cost_inv_sold_usd,
+    cost_inv_sold_local,
+    discount_usd,
+    discount_local,
+    material_margin_usd,
+    material_margin_local,
+    net_sales_usd,
+    net_sales_local,
+    cogs_usd,
+    cogs_local,
+    logistics_usd,
+    logistics_local,
+    credit_memo_usd,
+    credit_memo_local,
+    cst_fifo_usd,
+    cst_fifo_local,
+    cst_mkt_usd,
+    cst_mkt_local,
+
+    CASE
+        WHEN e2e_flag = 'E2E' THEN material_margin_usd
+        ELSE 0
+    END AS margin_e2e_usd,
+
+    CASE
+        WHEN e2e_flag = 'E2E' THEN material_margin_local
+        ELSE 0
+    END AS margin_e2e_local,
+
+    CASE
+        WHEN e2e_flag = 'E2E' THEN cogs_usd
+        ELSE 0
+    END AS cogs_e2e_usd,
+
+    CASE
+        WHEN e2e_flag = 'E2E' THEN cogs_local
+        ELSE 0
+    END AS cogs_e2e_local,
+
+    CASE
+        WHEN e2e_flag = 'E2E' THEN logistics_usd
+        ELSE 0
+    END AS logistics_e2e_usd,
+
+    CASE
+        WHEN e2e_flag = 'E2E' THEN logistics_local
+        ELSE 0
+    END AS logistics_e2e_local,
+
+    CASE
+        WHEN e2e_flag = 'E2E' THEN cst_fifo_usd
+        ELSE 0
+    END AS cst_fifo_e2e_usd,
+
+    CASE
+        WHEN e2e_flag = 'E2E' THEN cst_fifo_local
+        ELSE 0
+    END AS cst_fifo_e2e_local,
+
+    CASE
+        WHEN e2e_flag = 'E2E' THEN cst_mkt_usd
+        ELSE 0
+    END AS cst_mkt_e2e_usd,
+
+    CASE
+        WHEN e2e_flag = 'E2E' THEN cst_mkt_local
+        ELSE 0
+    END AS cst_mkt_e2e_local,
+
+    CASE
+        WHEN e2e_flag = 'E2E'
+        THEN cogs_usd + logistics_usd + cst_fifo_usd + cst_mkt_usd
+        ELSE 0
+    END AS cost_e2e_usd,
+
+    CASE
+        WHEN e2e_flag = 'E2E'
+        THEN cogs_local + logistics_local + cst_fifo_local + cst_mkt_local
+        ELSE 0
+    END AS cost_e2e_local,
+
+    CASE
+        WHEN e2e_flag = 'E2E' THEN toneladas_facturadas
+        ELSE 0
+    END AS tm_facturado_e2e,
+
+    CASE
+        WHEN e2e_flag = 'E2E' THEN toneladas_embarcadas
+        ELSE 0
+    END AS tm_embarcado_e2e
+
+FROM classified_data
+;
