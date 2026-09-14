@@ -9,6 +9,17 @@ SELECT
 
     MAX(profit.additional_quantity_in_tons) AS Tons,
 
+    /* Gross Sales */
+    SUM(
+        CASE
+            WHEN UPPER(TRIM(profit.cfmr_account_level1)) = 'GROSS SALES'
+             AND UPPER(profit.cfmr_account_description) NOT LIKE '%FREIGHT%'
+            THEN profit.amount_usd
+            ELSE 0
+        END
+    ) AS Gross_Sales_USD,
+
+    /* Material Cost */
     SUM(
         CASE
             WHEN UPPER(TRIM(profit.cfmr_account_level2))
@@ -20,6 +31,26 @@ SELECT
         END
     ) AS Material_Cost_USD,
 
+    /* Gross Sales / Ton */
+    CASE
+        WHEN MAX(profit.additional_quantity_in_tons) <> 0
+        THEN
+            ABS(
+                SUM(
+                    CASE
+                        WHEN UPPER(TRIM(profit.cfmr_account_level1)) = 'GROSS SALES'
+                         AND UPPER(profit.cfmr_account_description) NOT LIKE '%FREIGHT%'
+                        THEN profit.amount_usd
+                        ELSE 0
+                    END
+                )
+            )
+            /
+            MAX(profit.additional_quantity_in_tons)
+        ELSE NULL
+    END AS Gross_Sales_USD_Per_Ton,
+
+    /* Material Cost / Ton */
     CASE
         WHEN MAX(profit.additional_quantity_in_tons) <> 0
         THEN
@@ -55,17 +86,6 @@ GROUP BY
 
 HAVING
     MAX(profit.additional_quantity_in_tons) > 0
-
-    AND SUM(
-        CASE
-            WHEN UPPER(TRIM(profit.cfmr_account_level2))
-                    = 'COST OF INVENTORY SOLD'
-             AND UPPER(TRIM(profit.cfmr_account_level3))
-                    = 'MATERIAL COSTS'
-            THEN profit.amount_usd
-            ELSE 0
-        END
-    ) <> 0
 
 ORDER BY
     profit.posting_date DESC
