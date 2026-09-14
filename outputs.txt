@@ -1,37 +1,37 @@
 SELECT
-    profit.material_number AS Product_ID,
-    profit.fiscal_year AS FY,
-    profit.posting_period AS Month_,
-    profit.posting_date,
+    material_number AS Product_ID,
+    fiscal_year AS FY,
+    posting_period AS Month_,
+    posting_date,
 
-    profit.sales_order_number,
-    profit.sales_order_item,
+    sales_order_number,
+    sales_order_item,
 
-    profit.additional_quantity_in_tons,
+    additional_quantity_in_tons AS Tons,
 
-    profit.amount_usd,
+    amount_usd,
 
-    profit.cfmr_account_level1,
-    profit.cfmr_account_level2,
-    profit.cfmr_account_level3,
-    profit.cfmr_account_level4,
-    profit.cfmr_account_level5,
-    profit.cfmr_account_description
+    cfmr_account_level1,
+    cfmr_account_level2,
+    cfmr_account_level3,
+    cfmr_account_level4,
+    cfmr_account_level5,
+    cfmr_account_description
 
-FROM prd_product_anh_external_datablocks.tca_enhanced_profit_and_loss profit
+FROM prd_product_anh_external_datablocks.tca_enhanced_profit_and_loss
 
-WHERE UPPER(profit.sales_org) = 'HN10'
+WHERE UPPER(sales_org) = 'HN10'
 
-  AND UPPER(TRIM(profit.cfmr_account_level2))
-        = 'COST OF INVENTORY SOLD'
+  AND UPPER(TRIM(cfmr_account_level2))
+      = 'COST OF INVENTORY SOLD'
 
-  AND UPPER(TRIM(profit.cfmr_account_level3))
-        = 'MATERIAL COSTS'
+  AND UPPER(TRIM(cfmr_account_level3))
+      = 'MATERIAL COSTS'
 
-  AND profit.amount_usd <> 0
+  AND amount_usd <> 0
 
 ORDER BY
-    profit.posting_date DESC,
-    profit.material_number
+    posting_date DESC,
+    material_number
 
 LIMIT 50;
