@@ -1,1 +1,648 @@
-l
+WITH shipping_base AS (
+    /* BASE SHIPPING:
+    Trae las toneladas embarcadas desde shipping
+    y las dejo resumidas a nivel de:
+    order_number + order_line_number + product_id
+    */
+    SELECT
+        order_number,
+        order_line_number,
+        product_id,
+        SUM(quantity_ordered_item_unique_in_tons) AS toneladas_embarcadas
+    FROM prd_product_anh_external_datablocks.shipping
+    WHERE quantity_ordered_item_unique_in_tons IS NOT NULL
+    GROUP BY
+        order_number,
+        order_line_number,
+        product_id
+),
+
+org_base AS (
+    /* BAse ORGANIZACIÓN:
+    Se deja una unica fila por org_id
+    */
+    SELECT
+        org_id,
+        MAX(country_name) AS country_name
+    FROM prd_product_anh_core_data.org_location_core
+    GROUP BY
+        org_id
+),
+
+customer_base AS (
+    /* BASE CLIENTES:
+    Se deja solamente una fila por customer_ship_to_id
+    */
+    SELECT
+        customer_shipto_id,
+        MAX(customer_shipto_country_code) AS customer_shipto_country_code,
+        MAX(customer_soldto_price_list_erp) AS customer_soldto_price_list_erp,
+        MAX(customer_shipto_segment_code_erp) AS customer_shipto_segment_code_erp,
+        MAX(customer_segment_name) AS customer_segment_name,
+        MAX(customer_soldto_number) AS customer_central_number
+    FROM prd_product_anh_core_data.customer_core
+    GROUP BY
+        customer_shipto_id
+),
+
+product_base AS (
+    /* BASE PRODUCTO:
+    Se deja una unica fila por product_id
+    */
+    SELECT
+        product_id,
+        MAX(species_l2) AS species_l2,
+        MAX(sub_species_l3) AS sub_species_l3,
+        MAX(form_code) AS form_code,
+        MAX(container) AS container,
+        MAX(unit_type_code) AS unit_type_code
+    FROM prd_product_anh_core_data.product_core
+    GROUP BY
+        product_id
+),
+
+net_contents_base AS (
+    /* BASE NET CONTENTS:
+    Trae el tamaño/contenido neto desde tca_material_characteristics_assignments
+    filtrando solo las filas con characteristic_description = 'NET CONTENTS'.
+    Se deja una unica fila por material_number usando MAX para evitar duplicados
+    (algunos materiales pueden tener mas de un counter).
+    */
+    SELECT
+        material_number,
+        MAX(characteristic_value) AS net_contents
+    FROM prd_product_anh_internal_datablocks.tca_material_characteristics_assignments
+    WHERE characteristic_description = 'NET CONTENTS'
+    GROUP BY
+        material_number
+),
+
+profit_base AS (
+    SELECT
+        p.*,
+     /* 
+     -Toma las toneladas facturadas a nivel de linea, no a nivel de cuenta contable.
+     -Como en profit hay varias filas por la misma linea, aqui se guarda una sola linea usando el MAX.
+    */
+        MAX(p.additional_quantity_in_tons) OVER (
+            PARTITION BY
+                p.sales_order_number,
+                p.sales_order_item,
+                p.product_id,
+                p.material_number,
+                p.org_id,
+                p.customer_shipto_id
+        ) AS toneladas_facturadas_linea,
+    
+    /* 
+    Acá se marca una sola fila como la fila 1 por cada linea.
+    Luego el SELECT final, solo esa fila suma las toneladas.
+    Asi evito que la misma tonelada se repita por cada cienta del P&L.
+    */
+        ROW_NUMBER() OVER (
+            PARTITION BY
+                p.sales_order_number,
+                p.sales_order_item,
+                p.product_id,
+                p.material_number,
+                p.org_id,
+                p.customer_shipto_id
+            ORDER BY
+                p.accounting_document_number DESC,
+                p.ledger_posting_item DESC
+        ) AS rn_line
+
+    FROM prd_product_anh_external_datablocks.tca_enhanced_profit_and_loss p
+),
+
+main_data AS (
+    SELECT
+
+        org.country_name AS Ship_From,
+        profit.sales_org AS Sales_Org,
+        customer.customer_shipto_country_code AS Ship_To,
+        customer.customer_segment_name AS Customer_Segmentation,
+        customer.customer_shipto_segment_code_erp AS customer_segment,
+        -- Fecha/Año/Mes tomados de la VENTA (NET SALES / Billing). El costo (Goods Issue)
+        -- puede caer en un periodo distinto al de la factura; aqui se prioriza el periodo
+        -- de la venta para no perder el costo. Si la fila no tiene venta (ej. solo nota de
+        -- credito), se usa la fecha mas antigua disponible como respaldo.
+        COALESCE(
+            MIN(CASE WHEN profit.cfmr_account_level2 = 'NET SALES' THEN profit.posting_date END),
+            MIN(profit.posting_date)
+        ) AS Date_,
+        profit.sales_order_number AS Order_Number,
+        profit.sales_order_item AS Order_Line,
+        customer.customer_central_number AS customer_id,
+        profit.customer_sold_to_number AS customer_sold_to_number,
+        profit.source_customer_sold_to_name AS Customer_Name,
+        product.species_l2 AS Product_Category,
+        product.sub_species_l3 AS Product_Sub_Specie,
+        profit.material_number AS Product_ID,
+        profit.sap_material_description AS Product_Name,
+        COALESCE(
+            MIN(CASE WHEN profit.cfmr_account_level2 = 'NET SALES' THEN profit.fiscal_year END),
+            MIN(profit.fiscal_year)
+        ) AS FY,
+        COALESCE(
+            MIN(CASE WHEN profit.cfmr_account_level2 = 'NET SALES' THEN profit.posting_period END),
+            MIN(profit.posting_period)
+        ) AS Month_,
+        customer.customer_soldto_price_list_erp AS Price_List,
+
+        --Deja un solo vendedor por agrupación.
+        COALESCE(MAX(profit.sales_representative_name), 'SIN_VENDEDOR') AS Sales_Person,
+
+        product.form_code AS Form,
+        product.container AS Container,
+        product.unit_type_code AS empaque,
+        net_contents_base.net_contents AS Net_Contents,
+
+        /* 
+        Ya los mt no se duplican.
+        Solo suma la tonelada de la fila rn_line = 1
+        */
+        COALESCE(
+            SUM(
+                CASE
+                    WHEN profit.rn_line = 1 THEN profit.toneladas_facturadas_linea
+                    ELSE 0
+                END
+            ),
+            0
+        ) AS Metric_Tons,
+
+        -- Gross Sales solo producto (excluye ingreso por flete)
+        CAST(
+            SUM(
+                CASE
+                    WHEN profit.cfmr_account_level1 = 'GROSS SALES'
+                        AND UPPER(profit.cfmr_account_description) NOT LIKE '%FREIGHT%'
+                    THEN profit.amount_usd
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS Gross_Sales_USD,
+
+        -- Ingreso por flete (Freight Revenue)
+        CAST(
+            SUM(
+                CASE
+                    WHEN profit.cfmr_account_level1 = 'GROSS SALES'
+                        AND UPPER(profit.cfmr_account_description) LIKE '%FREIGHT%'
+                    THEN profit.amount_usd
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS Freight_Revenue_USD,
+
+        CAST(
+            SUM(
+                CASE
+                    WHEN profit.cfmr_account_level1 = 'GROSS SALES'
+                    THEN profit.amount_company_code_currency
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS Gross_Sales_Local,
+
+        CAST(
+            SUM(
+                CASE
+                    WHEN UPPER(profit.cfmr_account_description) LIKE '%DISCOUNT%'
+                    THEN profit.amount_usd
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS Discount_USD,
+
+        CAST(
+            SUM(
+                CASE
+                    WHEN UPPER(profit.cfmr_account_description) LIKE '%DISCOUNT%'
+                    THEN profit.amount_company_code_currency
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS Discount_Local,
+
+        /* ── COGS subdividido por categoría (USD) ── */
+        CAST(
+            SUM(
+                CASE
+                    WHEN UPPER(profit.cfmr_account_level1) LIKE '%DEPRECIATION%'
+                      OR UPPER(profit.cfmr_account_level1) LIKE '%DEPR EXP%'
+                      OR UPPER(profit.cfmr_account_level1) LIKE '%AMORT EXP%'
+                    THEN profit.amount_usd
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS COGS_Depreciation_USD,
+
+        CAST(
+            SUM(
+                CASE
+                    WHEN UPPER(profit.cfmr_account_level1) LIKE '%MANUFACTURING%'
+                    THEN profit.amount_usd
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS COGS_Manufacturing_USD,
+
+        CAST(
+            SUM(
+                CASE
+                    WHEN UPPER(profit.cfmr_account_level1) LIKE '%PACKAGING%'
+                    THEN profit.amount_usd
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS COGS_Packaging_USD,
+
+        CAST(
+            SUM(
+                CASE
+                    WHEN UPPER(profit.cfmr_account_level1) LIKE '%INGREDIENT%'
+                    THEN profit.amount_usd
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS COGS_Ingredients_USD,
+
+        CAST(
+            SUM(
+                CASE
+                    WHEN UPPER(profit.cfmr_account_level1) LIKE '%COGS%'
+                      AND UPPER(profit.cfmr_account_level1) NOT LIKE '%DEPRECIATION%'
+                      AND UPPER(profit.cfmr_account_level1) NOT LIKE '%DEPR EXP%'
+                      AND UPPER(profit.cfmr_account_level1) NOT LIKE '%AMORT EXP%'
+                      AND UPPER(profit.cfmr_account_level1) NOT LIKE '%MANUFACTURING%'
+                      AND UPPER(profit.cfmr_account_level1) NOT LIKE '%PACKAGING%'
+                      AND UPPER(profit.cfmr_account_level1) NOT LIKE '%INGREDIENT%'
+                    THEN profit.amount_usd
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS COGS_Otros_USD,
+
+        -- COGS total (todas las categorias anteriores), usado para el calculo E2E
+        CAST(
+            SUM(
+                CASE
+                    WHEN UPPER(profit.cfmr_account_level1) LIKE '%COGS%'
+                    THEN profit.amount_usd
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS COGS_Total_USD,
+
+        CAST(
+            SUM(
+                CASE
+                    WHEN UPPER(profit.cfmr_account_level1) LIKE '%COGS%'
+                    THEN profit.amount_company_code_currency
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS COGS_Total_Local,
+
+        -- Material Cost LATAM = Ingredients + Packaging (usado para el Margin E2E)
+        CAST(
+            SUM(CASE WHEN UPPER(profit.cfmr_account_level1) LIKE '%INGREDIENT%' THEN profit.amount_usd ELSE 0 END)
+          + SUM(CASE WHEN UPPER(profit.cfmr_account_level1) LIKE '%PACKAGING%' THEN profit.amount_usd ELSE 0 END)
+            AS DECIMAL(18,3)
+        ) AS Material_Cost_LATAM_USD,
+
+        -- Other Costs LATAM = Manufacturing + Depreciation + Otros + Freight (fuera del margen)
+        CAST(
+            SUM(CASE WHEN UPPER(profit.cfmr_account_level1) LIKE '%MANUFACTURING%' THEN profit.amount_usd ELSE 0 END)
+          + SUM(CASE
+                WHEN UPPER(profit.cfmr_account_level1) LIKE '%DEPRECIATION%'
+                  OR UPPER(profit.cfmr_account_level1) LIKE '%DEPR EXP%'
+                  OR UPPER(profit.cfmr_account_level1) LIKE '%AMORT EXP%'
+                THEN profit.amount_usd ELSE 0 END)
+          + SUM(CASE
+                WHEN UPPER(profit.cfmr_account_level1) LIKE '%COGS%'
+                  AND UPPER(profit.cfmr_account_level1) NOT LIKE '%DEPRECIATION%'
+                  AND UPPER(profit.cfmr_account_level1) NOT LIKE '%DEPR EXP%'
+                  AND UPPER(profit.cfmr_account_level1) NOT LIKE '%AMORT EXP%'
+                  AND UPPER(profit.cfmr_account_level1) NOT LIKE '%MANUFACTURING%'
+                  AND UPPER(profit.cfmr_account_level1) NOT LIKE '%PACKAGING%'
+                  AND UPPER(profit.cfmr_account_level1) NOT LIKE '%INGREDIENT%'
+                THEN profit.amount_usd ELSE 0 END)
+          + SUM(CASE WHEN UPPER(profit.cfmr_account_description) LIKE '%FREIGHT%' THEN profit.amount_usd ELSE 0 END)
+            AS DECIMAL(18,3)
+        ) AS Other_Costs_LATAM_USD,
+
+        CAST(
+            SUM(
+                CASE
+                    WHEN profit.cfmr_account_level5 = 'MATERIAL MARGIN'
+                    THEN profit.amount_usd
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS Material_Margin_USD,
+
+        CAST(
+            SUM(
+                CASE
+                    WHEN profit.cfmr_account_level5 = 'MATERIAL MARGIN'
+                    THEN profit.amount_company_code_currency
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS Material_Margin_Local,
+
+        CAST(
+            SUM(
+                CASE
+                    WHEN profit.cfmr_account_level2 = 'COST OF INVENTORY SOLD'
+                    THEN profit.amount_usd
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS Cost_Inv_Sold_USD,
+
+        CAST(
+            SUM(
+                CASE
+                    WHEN profit.cfmr_account_level2 = 'COST OF INVENTORY SOLD'
+                    THEN profit.amount_company_code_currency
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS Cost_Inv_Sold_Local,
+
+        CAST(
+            SUM(
+                CASE
+                    WHEN profit.cfmr_account_level2 = 'NET SALES'
+                    THEN profit.amount_usd
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS Net_Sales_USD,
+
+        CAST(
+            SUM(
+                CASE
+                    WHEN profit.cfmr_account_level2 = 'NET SALES'
+                    THEN profit.amount_company_code_currency
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS Net_Sales_Local,
+
+        CAST(
+            SUM(
+                CASE
+                    WHEN profit.cfmr_account_level2 = 'LOGISTICS'
+                    THEN profit.amount_usd
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS Logistics_USD,
+
+        CAST(
+            SUM(
+                CASE
+                    WHEN profit.cfmr_account_level2 = 'LOGISTICS'
+                    THEN profit.amount_company_code_currency
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS Logistics_Local,
+
+        CAST(
+            SUM(
+                CASE
+                    WHEN UPPER(profit.billing_type_code) LIKE '%G2%'
+                    THEN profit.amount_usd
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS Credit_Memo_USD,
+
+        CAST(
+            SUM(
+                CASE
+                    WHEN UPPER(profit.billing_type_code) LIKE '%G2%'
+                    THEN profit.amount_company_code_currency
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS Credit_Memo_Local,
+        CAST(
+            SUM(
+                CASE
+                    WHEN UPPER(profit.cfmr_account_description) LIKE '%FREIGHT%'
+                    THEN profit.amount_usd
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS Freight_USD,
+        CAST(
+            SUM(
+                CASE
+                    WHEN UPPER(profit.cfmr_account_description) LIKE '%FREIGHT%'
+                    THEN profit.amount_company_code_currency
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) AS Freight_Local,
+
+
+        shipping_base.order_number AS order_number_shipping,
+
+        --Toneladas facturadas
+        COALESCE(
+            SUM(
+                CASE
+                    WHEN profit.rn_line = 1 THEN COALESCE(profit.toneladas_facturadas_linea,0)
+                    ELSE 0
+                END
+            ),
+            0
+        ) AS toneladas_facturadas,
+
+        COALESCE(
+            SUM(
+                CASE
+                    WHEN profit.rn_line = 1 THEN COALESCE(shipping_base.toneladas_embarcadas, 0)
+                    ELSE 0
+                END
+            ),
+            0
+        ) AS toneladas_embarcadas,
+
+        -- TRANSPARENCIA: marca cuando el embarque/costo (Goods Issue) y la factura (Billing)
+        -- de este pedido cayeron en distinto anio o mes fiscal. Sirve para explicar
+        -- diferencias contra KE24/el libro contable cuando se reconcilia mes a mes.
+        -- (Se usa MIN/MAX en vez de COUNT(DISTINCT) porque Impala falla con
+        -- IllegalStateException al combinar multiples COUNT(DISTINCT) con las
+        -- funciones de ventana del CTE profit_base.)
+        CASE
+            WHEN MIN(profit.fiscal_year) <> MAX(profit.fiscal_year)
+              OR MIN(profit.posting_period) <> MAX(profit.posting_period)
+            THEN 'SI'
+            ELSE 'NO'
+        END AS Costeo_Ajustado_Periodo_Posterior
+
+    FROM profit_base AS profit
+
+    LEFT JOIN org_base AS org
+        ON profit.org_id = org.org_id
+
+    LEFT JOIN customer_base AS customer
+        ON profit.customer_shipto_id = customer.customer_shipto_id
+
+    LEFT JOIN product_base AS product
+        ON profit.product_id = product.product_id
+
+    LEFT JOIN net_contents_base
+        ON profit.material_number = net_contents_base.material_number
+
+    LEFT JOIN shipping_base
+        ON profit.sales_order_number = shipping_base.order_number
+       AND profit.sales_order_item = shipping_base.order_line_number
+       AND (profit.product_id = shipping_base.product_id
+            OR (profit.product_id IS NULL AND shipping_base.product_id IS NULL))
+
+    WHERE org.country_name IN ('Guatemala', 'Honduras', 'Nicaragua', 'El Salvador', 'Costa Rica', 'Panama', 'Aruba', 'Republica Dominicana', 'Puerto Rico')
+        AND (customer.customer_central_number IS NULL OR customer.customer_central_number NOT IN ('1000180708', '1000068657', '1000023782', '1800098231', '1000180648', '1800098230', '1000180647'))
+        -- Excluye facturas intercompany (Billing Document Type que inicia con 'IV': IV, IV2, IVS, IV2S, etc.)
+        AND (profit.billing_type_code IS NULL OR UPPER(profit.billing_type_code) NOT LIKE 'IV%')
+        AND profit.material_type = 'ZMAT'
+
+    GROUP BY
+        org.country_name,
+        profit.sales_org,
+        customer.customer_shipto_country_code,
+        customer.customer_soldto_price_list_erp,
+        product.species_l2,
+        product.sub_species_l3,
+        customer.customer_shipto_segment_code_erp,
+        customer.customer_segment_name,
+        profit.sap_material_description,
+        product.form_code,
+        product.container,
+        product.unit_type_code,
+        net_contents_base.net_contents,
+        profit.source_customer_sold_to_name,
+        customer.customer_central_number,
+        profit.material_number,
+        profit.customer_sold_to_number,
+        profit.sales_order_number,
+        profit.sales_order_item,
+        shipping_base.order_number
+    HAVING
+        COALESCE(
+            SUM(
+                CASE
+                    WHEN profit.rn_line = 1 THEN profit.toneladas_facturadas_linea
+                    ELSE 0
+                END
+            ),
+            0) > 0
+        -- Excluye filas donde Net Sales es 0 (sin venta real)
+        AND CAST(
+            SUM(
+                CASE
+                    WHEN profit.cfmr_account_level2 = 'NET SALES'
+                    THEN profit.amount_usd
+                    ELSE 0
+                END
+            ) AS DECIMAL(18,3)
+        ) <> 0
+        OR
+            CAST(
+                SUM(
+                    CASE
+                        WHEN UPPER(profit.billing_type_code) LIKE '%G2%'
+                        THEN profit.amount_usd
+                        ELSE 0
+                    END
+                ) AS DECIMAL(18,3)
+            ) <> 0
+),
+
+/* Costo de Honduras (planta productora, sales_org = HN10) por producto+periodo (FY/Month_).
+   Se usa para sustituir el Material Cost LATAM y el Other Costs LATAM en TODAS las filas E2E,
+   ya que el material siempre se produce en Honduras aunque el ship_from de la fila sea otro pais. */
+hn10_cost_base AS (
+    SELECT
+        Product_ID,
+        FY,
+        Month_,
+        CASE WHEN SUM(toneladas_facturadas) <> 0
+             THEN SUM(Material_Cost_LATAM_USD) / SUM(toneladas_facturadas)
+             ELSE 0
+        END AS hn10_material_cost_usd_per_ton,
+        CASE WHEN SUM(toneladas_facturadas) <> 0
+             THEN SUM(Other_Costs_LATAM_USD) / SUM(toneladas_facturadas)
+             ELSE 0
+        END AS hn10_other_costs_usd_per_ton
+    FROM main_data
+    WHERE UPPER(Sales_Org) = 'HN10'
+    GROUP BY
+        Product_ID,
+        FY,
+        Month_
+),
+
+classified_data AS (
+    SELECT
+        main_data.*,
+        hn.hn10_material_cost_usd_per_ton,
+        hn.hn10_other_costs_usd_per_ton,
+        CONCAT(main_data.Ship_From, ' -> ', main_data.Ship_To) AS Route_Key,
+        CASE
+            WHEN main_data.Product_ID IN ('4053_AM_PL_20KG','4053_PT_PL_20KG','4054_PT_PL_25KG','4056_LE_PL_25KG') THEN 'Specific Pork Products'
+            WHEN UPPER(Product_Category) ILIKE '%PET%' THEN 'Pet Food'
+            WHEN UPPER(Product_Category) ILIKE '%TILAPIA%' THEN 'Tilapia'
+            ELSE 'Other'
+        END AS Process_Family,
+        -- E2E_Flag depende unicamente de Sales_Org (ya no de Ship_From/Ship_To/Product_Category).
+        -- Excepcion: Sales_Org = GT10 con producto "Other" (no Pet Food, no Tilapia, no cerdo especifico) se mantiene Normal.
+        CASE
+            WHEN UPPER(main_data.Sales_Org) = 'GT10'
+                 AND main_data.Product_ID NOT IN ('4053_AM_PL_20KG','4053_PT_PL_20KG','4054_PT_PL_25KG','4056_LE_PL_25KG')
+                 AND UPPER(Product_Category) NOT ILIKE '%PET%'
+                 AND UPPER(Product_Category) NOT ILIKE '%TILAPIA%'
+            THEN 'Normal'
+            WHEN UPPER(main_data.Sales_Org) = 'HN10' THEN 'Normal'
+            WHEN UPPER(main_data.Sales_Org) IN ('HN20', 'GT10', 'NI10', 'CR10') THEN 'E2E'
+            ELSE 'Normal'
+        END AS E2E_Flag
+    FROM main_data
+    LEFT JOIN hn10_cost_base hn
+        ON main_data.Product_ID = hn.Product_ID
+       AND main_data.FY = hn.FY
+       AND main_data.Month_ = hn.Month_
+)
+
+SELECT
+    *,
+    -- Material Cost LATAM y Other Costs LATAM tomados siempre de Honduras (sales_org HN10), la planta productora
+    CASE WHEN E2E_Flag = 'E2E' THEN COALESCE(hn10_material_cost_usd_per_ton, 0) * toneladas_facturadas ELSE 0 END AS Material_Cost_LATAM_E2E_USD,
+    CASE WHEN E2E_Flag = 'E2E' THEN COALESCE(hn10_other_costs_usd_per_ton, 0) * toneladas_facturadas ELSE 0 END AS Other_Costs_LATAM_E2E_USD,
+    -- Margin E2E = Gross Sales + Discount + Material Cost LATAM (Honduras)
+    CASE
+        WHEN E2E_Flag = 'E2E' THEN Gross_Sales_USD + Discount_USD + (COALESCE(hn10_material_cost_usd_per_ton, 0) * toneladas_facturadas)
+        ELSE 0
+    END AS Margin_E2E_USD,
+    -- La logistica se mantiene asignada por Ship_To (no se sustituye por Honduras)
+    CASE WHEN E2E_Flag = 'E2E' THEN Logistics_USD ELSE 0 END AS Logistics_E2E_USD,
+    -- Cost E2E total = Material Cost LATAM + Other Costs LATAM (ambos de Honduras) + Logistics (por Ship_To)
+    CASE
+        WHEN E2E_Flag = 'E2E' THEN
+            (COALESCE(hn10_material_cost_usd_per_ton, 0) * toneladas_facturadas)
+          + (COALESCE(hn10_other_costs_usd_per_ton, 0) * toneladas_facturadas)
+          + Logistics_USD
+        ELSE 0
+    END AS Cost_E2E_USD,
+    CASE WHEN E2E_Flag = 'E2E' THEN toneladas_facturadas ELSE 0 END AS TM_Facturado_E2E,
+    CASE WHEN E2E_Flag = 'E2E' THEN toneladas_embarcadas ELSE 0 END AS TM_Embarcado_E2E
+FROM classified_data;
+
