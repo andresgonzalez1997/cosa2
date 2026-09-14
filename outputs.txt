@@ -7,87 +7,31 @@ SELECT
     profit.sales_order_number,
     profit.sales_order_item,
 
-    MAX(profit.additional_quantity_in_tons) AS Tons,
+    profit.additional_quantity_in_tons,
 
-    /* Gross Sales */
-    SUM(
-        CASE
-            WHEN UPPER(TRIM(profit.cfmr_account_level1)) = 'GROSS SALES'
-             AND UPPER(profit.cfmr_account_description) NOT LIKE '%FREIGHT%'
-            THEN profit.amount_usd
-            ELSE 0
-        END
-    ) AS Gross_Sales_USD,
+    profit.amount_usd,
 
-    /* Material Cost */
-    SUM(
-        CASE
-            WHEN UPPER(TRIM(profit.cfmr_account_level2))
-                    = 'COST OF INVENTORY SOLD'
-             AND UPPER(TRIM(profit.cfmr_account_level3))
-                    = 'MATERIAL COSTS'
-            THEN profit.amount_usd
-            ELSE 0
-        END
-    ) AS Material_Cost_USD,
-
-    /* Gross Sales / Ton */
-    CASE
-        WHEN MAX(profit.additional_quantity_in_tons) <> 0
-        THEN
-            ABS(
-                SUM(
-                    CASE
-                        WHEN UPPER(TRIM(profit.cfmr_account_level1)) = 'GROSS SALES'
-                         AND UPPER(profit.cfmr_account_description) NOT LIKE '%FREIGHT%'
-                        THEN profit.amount_usd
-                        ELSE 0
-                    END
-                )
-            )
-            /
-            MAX(profit.additional_quantity_in_tons)
-        ELSE NULL
-    END AS Gross_Sales_USD_Per_Ton,
-
-    /* Material Cost / Ton */
-    CASE
-        WHEN MAX(profit.additional_quantity_in_tons) <> 0
-        THEN
-            ABS(
-                SUM(
-                    CASE
-                        WHEN UPPER(TRIM(profit.cfmr_account_level2))
-                                = 'COST OF INVENTORY SOLD'
-                         AND UPPER(TRIM(profit.cfmr_account_level3))
-                                = 'MATERIAL COSTS'
-                        THEN profit.amount_usd
-                        ELSE 0
-                    END
-                )
-            )
-            /
-            MAX(profit.additional_quantity_in_tons)
-        ELSE NULL
-    END AS Material_Cost_USD_Per_Ton
+    profit.cfmr_account_level1,
+    profit.cfmr_account_level2,
+    profit.cfmr_account_level3,
+    profit.cfmr_account_level4,
+    profit.cfmr_account_level5,
+    profit.cfmr_account_description
 
 FROM prd_product_anh_external_datablocks.tca_enhanced_profit_and_loss profit
 
 WHERE UPPER(profit.sales_org) = 'HN10'
-  AND profit.material_type = 'ZMAT'
 
-GROUP BY
-    profit.material_number,
-    profit.fiscal_year,
-    profit.posting_period,
-    profit.posting_date,
-    profit.sales_order_number,
-    profit.sales_order_item
+  AND UPPER(TRIM(profit.cfmr_account_level2))
+        = 'COST OF INVENTORY SOLD'
 
-HAVING
-    MAX(profit.additional_quantity_in_tons) > 0
+  AND UPPER(TRIM(profit.cfmr_account_level3))
+        = 'MATERIAL COSTS'
+
+  AND profit.amount_usd <> 0
 
 ORDER BY
-    profit.posting_date DESC
+    profit.posting_date DESC,
+    profit.material_number
 
 LIMIT 50;
