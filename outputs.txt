@@ -1,1 +1,10 @@
 
+SELECT
+    sap_product_id,
+    COUNT(DISTINCT material_base_unit_of_measure) AS cantidad_um
+FROM prd_product_anh_internal_datablocks.tca_movements
+WHERE sap_product_id IS NOT NULL
+  AND material_base_unit_of_measure IS NOT NULL
+GROUP BY sap_product_id
+HAVING COUNT(DISTINCT material_base_unit_of_measure) > 1
+LIMIT 100;
