@@ -1,16 +1,10 @@
 SELECT DISTINCT
     characteristic_name,
-    characteristic_description,
-    characteristic_value_counter
+    characteristic_description
 FROM prd_product_anh_internal_datablocks.tca_material_characteristics_assignments
 WHERE
-       UPPER(characteristic_name) LIKE '%MVGR%'
-    OR UPPER(characteristic_description) LIKE '%MVGR%'
-    OR UPPER(characteristic_name) LIKE '%MATERIAL%GROUP%'
-    OR UPPER(characteristic_description) LIKE '%MATERIAL%GROUP%'
-    OR UPPER(characteristic_name) LIKE '%MAT%GROUP%'
-    OR UPPER(characteristic_description) LIKE '%MAT%GROUP%'
+       UPPER(characteristic_name) LIKE '%GR%'
+    OR UPPER(characteristic_description) LIKE '%GR%'
 ORDER BY
     characteristic_name,
-    characteristic_description,
-    characteristic_value_counter;
+    characteristic_description;
