@@ -1,10 +1,16 @@
-
-SELECT
-    sap_product_id,
-    COUNT(DISTINCT material_base_unit_of_measure) AS cantidad_um
-FROM prd_product_anh_internal_datablocks.tca_movements
-WHERE sap_product_id IS NOT NULL
-  AND material_base_unit_of_measure IS NOT NULL
-GROUP BY sap_product_id
-HAVING COUNT(DISTINCT material_base_unit_of_measure) > 1
-LIMIT 100;
+SELECT DISTINCT
+    characteristic_name,
+    characteristic_description,
+    characteristic_value_counter
+FROM prd_product_anh_internal_datablocks.tca_material_characteristics_assignments
+WHERE
+       UPPER(characteristic_name) LIKE '%MVGR%'
+    OR UPPER(characteristic_description) LIKE '%MVGR%'
+    OR UPPER(characteristic_name) LIKE '%MATERIAL%GROUP%'
+    OR UPPER(characteristic_description) LIKE '%MATERIAL%GROUP%'
+    OR UPPER(characteristic_name) LIKE '%MAT%GROUP%'
+    OR UPPER(characteristic_description) LIKE '%MAT%GROUP%'
+ORDER BY
+    characteristic_name,
+    characteristic_description,
+    characteristic_value_counter;
