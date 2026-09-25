@@ -1,34 +1,41 @@
+A. org_location_core
+
 SELECT
-    billing_document_number,
+    org_id,
+    COUNT(*) AS qty
+FROM prd_product_anh_core_data.org_location_core
+WHERE org_id IS NOT NULL
+GROUP BY org_id
+HAVING COUNT(*) > 1
+ORDER BY qty DESC
+LIMIT 100;
 
-    SUM(
-        CASE
-            WHEN cfmr_account_description ILIKE '%DISCOUNT%'
-            THEN amount_company_code_currency
-            ELSE 0
-        END
-    ) AS discount_local,
 
-    SUM(
-        CASE
-            WHEN cfmr_account_description NOT ILIKE '%DISCOUNT%'
-                 OR cfmr_account_description IS NULL
-            THEN amount_company_code_currency
-            ELSE 0
-        END
-    ) AS amount_before_discount_local,
 
-    SUM(amount_company_code_currency) AS total_local,
 
-    COUNT(
-        CASE
-            WHEN cfmr_account_description ILIKE '%DISCOUNT%'
-            THEN 1
-        END
-    ) AS discount_rows
+B. customer_core
 
-FROM prd_product_anh_external_datablocks.tca_enhanced_profit_and_loss
+SELECT
+    customer_shipto_id,
+    COUNT(*) AS qty
+FROM prd_product_anh_core_data.customer_core
+WHERE customer_shipto_id IS NOT NULL
+GROUP BY customer_shipto_id
+HAVING COUNT(*) > 1
+ORDER BY qty DESC
+LIMIT 100;
 
-WHERE billing_document_number = '9520212283'
 
-GROUP BY billing_document_number;
+
+
+C. product_core
+
+SELECT
+    product_id,
+    COUNT(*) AS qty
+FROM prd_product_anh_core_data.product_core
+WHERE product_id IS NOT NULL
+GROUP BY product_id
+HAVING COUNT(*) > 1
+ORDER BY qty DESC
+LIMIT 100;
