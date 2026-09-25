@@ -1,1 +1,63 @@
--
+SELECT
+    COUNT(*) AS rows_before_country_filter,
+
+    SUM(
+        CASE
+            WHEN org.org_id IS NULL
+            THEN 1
+            ELSE 0
+        END
+    ) AS rows_without_org,
+
+    SUM(
+        CASE
+            WHEN org.country_name IN (
+                'Guatemala',
+                'Honduras',
+                'Nicaragua',
+                'El Salvador',
+                'Costa Rica',
+                'Panama',
+                'Aruba',
+                'Republica Dominicana',
+                'Puerto Rico'
+            )
+            THEN 1
+            ELSE 0
+        END
+    ) AS rows_in_scope,
+
+    SUM(
+        CASE
+            WHEN org.org_id IS NOT NULL
+             AND (
+                    org.country_name NOT IN (
+                        'Guatemala',
+                        'Honduras',
+                        'Nicaragua',
+                        'El Salvador',
+                        'Costa Rica',
+                        'Panama',
+                        'Aruba',
+                        'Republica Dominicana',
+                        'Puerto Rico'
+                    )
+                    OR org.country_name IS NULL
+                 )
+            THEN 1
+            ELSE 0
+        END
+    ) AS rows_outside_scope
+
+FROM prd_product_anh_external_datablocks.tca_enhanced_profit_and_loss profit
+
+LEFT JOIN prd_product_anh_core_data.org_location_core org
+    ON profit.org_id = org.org_id
+
+WHERE profit.billing_type_code IN (
+    'ZUFD',
+    'RE',
+    'S1',
+    'L2',
+    'G2'
+);
