@@ -1,1 +1,68 @@
--
+SELECT
+    billing_document_number,
+    sales_order_item,
+    material_number,
+
+    COUNT(*) AS rows_item,
+
+    SUM(
+        CASE
+            WHEN additional_quantity_in_tons IS NOT NULL
+             AND additional_quantity_in_tons <> 0
+            THEN 1
+            ELSE 0
+        END
+    ) AS rows_with_real_tm,
+
+    COUNT(
+        DISTINCT CASE
+            WHEN additional_quantity_in_tons IS NOT NULL
+             AND additional_quantity_in_tons <> 0
+            THEN additional_quantity_in_tons
+        END
+    ) AS distinct_real_tm_values,
+
+    SUM(
+        CASE
+            WHEN additional_quantity_in_tons IS NOT NULL
+             AND additional_quantity_in_tons <> 0
+            THEN additional_quantity_in_tons
+            ELSE 0
+        END
+    ) AS sum_real_tm,
+
+    MAX(
+        CASE
+            WHEN additional_quantity_in_tons IS NOT NULL
+             AND additional_quantity_in_tons <> 0
+            THEN additional_quantity_in_tons
+        END
+    ) AS max_real_tm
+
+FROM prd_product_anh_external_datablocks.tca_enhanced_profit_and_loss
+
+WHERE billing_type_code IN (
+    'ZUFD',
+    'RE',
+    'S1',
+    'L2',
+    'G2'
+)
+AND billing_document_number IS NOT NULL
+
+GROUP BY
+    billing_document_number,
+    sales_order_item,
+    material_number
+
+HAVING
+    SUM(
+        CASE
+            WHEN additional_quantity_in_tons IS NOT NULL
+             AND additional_quantity_in_tons <> 0
+            THEN 1
+            ELSE 0
+        END
+    ) > 1
+
+LIMIT 100;
