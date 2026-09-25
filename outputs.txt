@@ -1,26 +1,34 @@
 SELECT
-    sales_order_item,
-    material_number,
-    sap_material_description,
+    billing_document_number,
 
-    account_number,
-    account_description,
-    cfmr_account_description,
+    SUM(
+        CASE
+            WHEN cfmr_account_description ILIKE '%DISCOUNT%'
+            THEN amount_company_code_currency
+            ELSE 0
+        END
+    ) AS discount_local,
 
-    accounting_document_number,
-    ledger_posting_item,
+    SUM(
+        CASE
+            WHEN cfmr_account_description NOT ILIKE '%DISCOUNT%'
+                 OR cfmr_account_description IS NULL
+            THEN amount_company_code_currency
+            ELSE 0
+        END
+    ) AS amount_before_discount_local,
 
-    amount_usd,
-    amount_company_code_currency,
+    SUM(amount_company_code_currency) AS total_local,
 
-    additional_quantity_in_tons
+    COUNT(
+        CASE
+            WHEN cfmr_account_description ILIKE '%DISCOUNT%'
+            THEN 1
+        END
+    ) AS discount_rows
 
 FROM prd_product_anh_external_datablocks.tca_enhanced_profit_and_loss
 
 WHERE billing_document_number = '9520212283'
 
-ORDER BY
-    sales_order_item,
-    account_number,
-    accounting_document_number,
-    ledger_posting_item;
+GROUP BY billing_document_number;
